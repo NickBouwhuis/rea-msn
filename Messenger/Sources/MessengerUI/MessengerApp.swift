@@ -2,13 +2,22 @@ import AppKit
 import MSNKit
 import SwiftUI
 
-@main
+/// Starts the app for one service; the Messenger and MatrixMessenger
+/// executables call it with their profile.
+public enum MessengerLauncher {
+	@MainActor
+	public static func run(_ profile: IMServiceProfile) {
+		AppModel.profile = profile
+		MessengerApp.main()
+	}
+}
+
 struct MessengerApp: App {
 	@NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 	@StateObject private var app = AppModel.shared
 
 	var body: some Scene {
-		Window("Windows Live Messenger", id: "main") {
+		Window(AppModel.profile.appName, id: "main") {
 			MainView()
 				.environmentObject(app)
 				.frame(minWidth: 280, idealWidth: 310, minHeight: 560, idealHeight: 700)
@@ -34,8 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		// SwiftPM executables launch as background processes unless told otherwise.
 		NSApp.setActivationPolicy(.regular)
-		// WLM's skin is light only: in dark mode, text in its white fields would be white too.
-		NSApp.appearance = NSAppearance(named: .aqua)
 		NSApp.activate(ignoringOtherApps: true)
 		MainActor.assumeIsolated {
 			if let icon = Skin.shared.appIcon { NSApp.applicationIconImage = icon }
@@ -60,7 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
 	func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-		if !flag { sender.windows.first { $0.identifier?.rawValue == "main" || $0.title == "Windows Live Messenger" }?.makeKeyAndOrderFront(nil) }
+		if !flag {
+			let title = MainActor.assumeIsolated { AppModel.profile.appName }
+			sender.windows.first { $0.identifier?.rawValue == "main" || $0.title == title }?.makeKeyAndOrderFront(nil)
+		}
 		return true
 	}
 }
@@ -76,7 +86,7 @@ struct MainView: View {
 				SignInView()
 			}
 		}
-		.alert("Windows Live Messenger", isPresented: Binding(get: { app.alert != nil }, set: { if !$0 { app.alert = nil } })) {
+		.alert(app.profile.appName, isPresented: Binding(get: { app.alert != nil }, set: { if !$0 { app.alert = nil } })) {
 			Button("OK") { app.alert = nil }
 		} message: {
 			Text(app.alert ?? "")
@@ -121,9 +131,11 @@ struct MessengerCommands: Commands {
 				}
 			}
 			.disabled(app.phase != .signedIn)
-			Divider()
-			Button("Verify This Session...") { app.verification = .prompt }
-				.disabled(app.phase != .signedIn || !app.sessionUnverified)
+			if app.client is IMVerifying {
+				Divider()
+				Button("Verify This Session...") { app.verification = .prompt }
+					.disabled(app.phase != .signedIn || !app.sessionUnverified)
+			}
 		}
 	}
 }
@@ -153,13 +165,21 @@ struct OptionsView: View {
 			.tabItem { Label("General", systemImage: "person.crop.circle") }
 
 			Form {
-				Picker("Service", selection: $app.settings.server) {
-					ForEach(AppSettings.ServerChoice.allCases) { Text($0.title).tag($0) }
-				}
-				if app.settings.server == .custom {
-					TextField("Notification server host", text: $app.settings.customNSHost)
-					TextField("Port", value: $app.settings.customNSPort, format: .number.grouping(.never))
-					TextField("HTTPS base URL (RST.srf, abservice)", text: $app.settings.customHTTPBase)
+				switch app.profile.connection {
+				case .msnServer:
+					Picker("Service", selection: $app.settings.server) {
+						ForEach(AppSettings.ServerChoice.allCases) { Text($0.title).tag($0) }
+					}
+					if app.settings.server == .custom {
+						TextField("Notification server host", text: $app.settings.customNSHost)
+						TextField("Port", value: $app.settings.customNSPort, format: .number.grouping(.never))
+						TextField("HTTPS base URL (RST.srf, abservice)", text: $app.settings.customHTTPBase)
+					}
+				case .matrixHomeserver:
+					TextField("Homeserver URL", text: Binding(
+						get: { app.settings.matrixHomeserver ?? "" },
+						set: { app.settings.matrixHomeserver = $0.isEmpty ? nil : $0 }
+					), prompt: Text("Found from your Matrix ID when empty"))
 				}
 				Text("Changes apply the next time you sign in.").font(.caption).foregroundStyle(.secondary)
 			}

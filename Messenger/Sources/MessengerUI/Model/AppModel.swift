@@ -1,5 +1,4 @@
 import AppKit
-import MatrixKit
 import MSNKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -64,15 +63,22 @@ final class AppModel: ObservableObject {
 	let toasts = ToastCenter()
 	let sounds = SoundPlayer()
 
+	/// The service this app is built for (set by MessengerLauncher before anything else).
+	static var profile: IMServiceProfile = EscargotProfile()
 	static let shared = AppModel()
+	let profile: IMServiceProfile = AppModel.profile
 
 	// MARK: - Sign in
 
 	func signIn(email: String, password: String, status: Presence, rememberMe: Bool, rememberPassword: Bool, auto: Bool) {
 		let email = email.trimmingCharacters(in: .whitespaces).lowercased()
-		// Matrix homeservers may sign in through the browser instead, with no password here.
-		guard !email.isEmpty, !password.isEmpty || MatrixID.isUserID(email) else {
-			signInError = "Please type your e-mail address and password."
+		// Some services sign in without a password here (a saved session, the browser).
+		guard !email.isEmpty, !password.isEmpty || profile.allowsEmptyPassword(for: email) else {
+			signInError = "Please type your \(profile.accountLabel.lowercased().trimmingCharacters(in: [":"])) and password."
+			return
+		}
+		if let problem = profile.problem(withAccount: email) {
+			signInError = problem
 			return
 		}
 		signInError = nil
@@ -86,21 +92,12 @@ final class AppModel: ObservableObject {
 		settings = s
 		if !rememberPassword { Keychain.deletePassword(for: email) } else if !password.isEmpty { Keychain.setPassword(password, for: email) }
 
-		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
-		let client: any IMService
-		if MatrixID.isUserID(email) {
-			// MESSENGER_MATRIX_EPHEMERAL=1 (development): keep nothing, not even in the Keychain.
-			let matrix = ProcessInfo.processInfo.environment["MESSENGER_MATRIX_EPHEMERAL"] != nil
-				? MatrixClient.throwaway(homeserver: settings.matrixHomeserverURL)
-				: MatrixClient(homeserver: settings.matrixHomeserverURL)
-			matrix.openURL = { NSWorkspace.shared.open($0) }
-			// Without "Remember me", signing out also logs this device out.
-			matrix.keepsSessionOnSignOut = rememberMe
-			matrix.onVerification = { [weak self] in self?.handleVerification($0) }
+		let client = profile.makeClient(IMConnectionSettings(
+			msnServer: settings.serverConfig, homeserver: settings.matrixHomeserverURL, rememberMe: rememberMe,
+			openURL: { NSWorkspace.shared.open($0) }))
+		if let verifier = client as? IMVerifying {
+			verifier.onVerification = { [weak self] in self?.handleVerification($0) }
 			promptedVerification = false
-			client = matrix
-		} else {
-			client = MessengerClient(config: settings.serverConfig)
 		}
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
 			client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered
@@ -112,9 +109,9 @@ final class AppModel: ObservableObject {
 		phase = .signingIn("Signing in...")
 		Task {
 			do {
-				// MSN advertises the picture kept on this computer; a Matrix
-				// account's picture lives on the server (changed through chooseDisplayPicture).
-				if client is MessengerClient { await client.setDisplayPicture(try? Data(contentsOf: myPictureURL)) }
+				// MSN advertises the picture kept on this computer; elsewhere
+				// it lives on the server (changed through chooseDisplayPicture).
+				if profile.announcesLocalDisplayPicture { await client.setDisplayPicture(try? Data(contentsOf: myPictureURL)) }
 				try await client.signIn(email: email, password: password, status: status)
 				NSApp.activate(ignoringOtherApps: true)  // back from the browser after a browser sign-in
 			} catch {
@@ -156,7 +153,7 @@ final class AppModel: ObservableObject {
 			default: break
 			}
 		}
-		return "We can't sign you in to Windows Live Messenger. \(error.localizedDescription)"
+		return "We can't sign you in to \(profile.appName). \(error.localizedDescription)"
 	}
 
 	// MARK: - Profile
@@ -237,8 +234,8 @@ final class AppModel: ObservableObject {
 	func addContact(_ email: String) {
 		guard let client else { return }
 		let email = email.trimmingCharacters(in: .whitespaces).lowercased()
-		guard MatrixID.isUserID(email) || (email.contains("@") && email.contains(".")) else {
-			alert = "Please type a valid e-mail address, such as someone@example.com, or a Matrix ID, such as @someone:matrix.org."
+		if let problem = profile.problem(withContact: email) {
+			alert = problem
 			return
 		}
 		Task {
@@ -410,11 +407,11 @@ final class AppModel: ObservableObject {
 		client?.closeConversation(with: peer)
 	}
 
-	// MARK: - Matrix session verification
+	// MARK: - Session verification (services with end-to-end encryption)
 
-	private var matrix: MatrixClient? { client as? MatrixClient }
+	private var verifier: IMVerifying? { client as? IMVerifying }
 
-	private func handleVerification(_ event: MatrixClient.VerificationEvent) {
+	private func handleVerification(_ event: IMVerificationEvent) {
 		switch event {
 		case let .state(verified):
 			let wasUnverified = sessionUnverified
@@ -450,14 +447,14 @@ final class AppModel: ObservableObject {
 	func verifyWithOtherSession() {
 		verification = .waiting("Open Element (or another app you're signed in to) and accept the verification request there.")
 		Task {
-			do { try await matrix?.requestVerification() } catch { verification = .failed(error.localizedDescription) }
+			do { try await verifier?.requestVerification() } catch { verification = .failed(error.localizedDescription) }
 		}
 	}
 
 	func acceptIncomingVerification() {
 		verification = .waiting("Waiting for your other session...")
 		Task {
-			do { try await matrix?.acceptVerification() } catch { verification = .failed(error.localizedDescription) }
+			do { try await verifier?.acceptVerification() } catch { verification = .failed(error.localizedDescription) }
 		}
 	}
 
@@ -465,7 +462,7 @@ final class AppModel: ObservableObject {
 		verification = match ? .waiting("Waiting for your other session to confirm...")
 			: .failed("The emoji didn't match, so this session wasn't verified.")
 		Task {
-			do { try await matrix?.confirmVerification(match) } catch { verification = .failed(error.localizedDescription) }
+			do { try await verifier?.confirmVerification(match) } catch { verification = .failed(error.localizedDescription) }
 		}
 	}
 
@@ -473,7 +470,7 @@ final class AppModel: ObservableObject {
 		verification = .waiting("Checking your recovery key...")
 		Task {
 			do {
-				try await matrix?.recover(recoveryKey: key)
+				try await verifier?.recover(recoveryKey: key)
 				verification = .done
 			} catch {
 				verification = .failed("That recovery key didn't work. (\(error.localizedDescription))")
@@ -483,7 +480,7 @@ final class AppModel: ObservableObject {
 
 	func closeVerification() {
 		switch verification {
-		case .waiting?, .incoming?, .emojis?: Task { await matrix?.cancelVerification() }
+		case .waiting?, .incoming?, .emojis?: Task { await verifier?.cancelVerification() }
 		default: break
 		}
 		verification = nil

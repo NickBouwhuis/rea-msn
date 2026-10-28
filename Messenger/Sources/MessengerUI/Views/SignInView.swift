@@ -1,4 +1,3 @@
-import MatrixKit
 import MSNKit
 import SwiftUI
 
@@ -15,9 +14,10 @@ struct SignInView: View {
 	@State private var auto = false
 	@State private var showServer = false
 	@State private var didAutoSignIn = false
-	/// For a Matrix ID: how its homeserver signs people in (nil while unknown).
-	@State private var matrixMethod: MatrixClient.SignInMethod?
-	@State private var methodCheck: Task<Void, Never>?
+	/// Shown instead of the password box when this account needs none here
+	/// (Matrix: browser sign-in, a saved session); nil asks for the password.
+	@State private var passwordNote: String?
+	@State private var noteCheck: Task<Void, Never>?
 	private let s = Skin.shared
 
 	var body: some View {
@@ -50,7 +50,7 @@ struct SignInView: View {
 					.fixedSize(horizontal: false, vertical: true)
 					.padding(.bottom, 8)
 			}
-			label(s.string(61279, "E-mail address:"))
+			label(app.profile.connection == .msnServer ? s.string(61279, app.profile.accountLabel) : app.profile.accountLabel)
 			HStack(spacing: 0) {
 				TextField("", text: $email)
 					.textFieldStyle(.plain)
@@ -59,7 +59,7 @@ struct SignInView: View {
 					.padding(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
 					.onChange(of: email) { _, new in
 						loadSaved(for: new)
-						checkSignInMethod(new)
+						checkPasswordNote(new)
 					}
 				Menu {
 					ForEach(app.settings.rememberedAccounts, id: \.self) { acct in Button(acct) { email = acct } }
@@ -140,35 +140,49 @@ struct SignInView: View {
 
 	private var links: some View {
 		VStack(alignment: .leading, spacing: 0) {
-			WLMLink(title: s.string(61301, "Forgot your password?")) { NSWorkspace.shared.open(URL(string: "https://escargot.chat/forgot/")!) }
-			WLMLink(title: s.string(61303, "Service status")) { NSWorkspace.shared.open(URL(string: "https://escargot.chat/")!) }
-			WLMLink(title: "Connect to: \(app.settings.server == .escargot ? "escargot.chat" : app.settings.server.title)") {
-				showServer.toggle()
+			if let url = app.profile.forgotPasswordURL {
+				WLMLink(title: s.string(61301, "Forgot your password?")) { NSWorkspace.shared.open(url) }
 			}
-			.popover(isPresented: $showServer) { serverPicker }
+			if let url = app.profile.serviceStatusURL {
+				WLMLink(title: s.string(61303, "Service status")) { NSWorkspace.shared.open(url) }
+			}
+			WLMLink(title: connectionTitle) { showServer.toggle() }
+				.popover(isPresented: $showServer) { serverPicker }
 		}
 		.frame(width: 226, alignment: .leading)
 		.padding(.bottom, 12)
 	}
 
+	private var connectionTitle: String {
+		switch app.profile.connection {
+		case .msnServer:
+			return "Connect to: \(app.settings.server == .escargot ? "escargot.chat" : app.settings.server.title)"
+		case .matrixHomeserver:
+			return "Homeserver: \(app.settings.matrixHomeserverURL?.host ?? "found from your Matrix ID")"
+		}
+	}
+
 	private var serverPicker: some View {
 		VStack(alignment: .leading, spacing: 8) {
-			Picker("", selection: $app.settings.server) {
-				ForEach(AppSettings.ServerChoice.allCases) { Text($0.title).tag($0) }
+			switch app.profile.connection {
+			case .msnServer:
+				Picker("", selection: $app.settings.server) {
+					ForEach(AppSettings.ServerChoice.allCases) { Text($0.title).tag($0) }
+				}
+				.labelsHidden()
+				.pickerStyle(.radioGroup)
+				if app.settings.server == .custom {
+					TextField("Notification server host", text: $app.settings.customNSHost)
+					TextField("HTTPS base URL", text: $app.settings.customHTTPBase)
+				}
+			case .matrixHomeserver:
+				Text("Leave this empty to find your homeserver from your Matrix ID.")
+					.fixedSize(horizontal: false, vertical: true)
+				TextField("https://matrix.example.org", text: Binding(
+					get: { app.settings.matrixHomeserver ?? "" },
+					set: { app.settings.matrixHomeserver = $0.isEmpty ? nil : $0 }
+				))
 			}
-			.labelsHidden()
-			.pickerStyle(.radioGroup)
-			if app.settings.server == .custom {
-				TextField("Notification server host", text: $app.settings.customNSHost)
-				TextField("HTTPS base URL", text: $app.settings.customHTTPBase)
-			}
-			Divider()
-			Text("Sign in with a Matrix ID (@you:matrix.org) to use Matrix instead.")
-				.fixedSize(horizontal: false, vertical: true)
-			TextField("Homeserver URL (blank: find it automatically)", text: Binding(
-				get: { app.settings.matrixHomeserver ?? "" },
-				set: { app.settings.matrixHomeserver = $0.isEmpty ? nil : $0 }
-			))
 		}
 		.font(WLMFont.regular())
 		.padding(12)
@@ -196,7 +210,7 @@ struct SignInView: View {
 		rememberPassword = st.rememberPassword
 		auto = st.signInAutomatically
 		loadSaved(for: email)
-		checkSignInMethod(email)
+		checkPasswordNote(email)
 		if auto, !didAutoSignIn, !password.isEmpty, app.signInError == nil {
 			didAutoSignIn = true
 			signIn()
@@ -209,28 +223,19 @@ struct SignInView: View {
 		}
 	}
 
-	/// Asks a Matrix ID's homeserver whether it takes passwords or signs in through the browser.
-	private func checkSignInMethod(_ account: String) {
-		methodCheck?.cancel()
-		matrixMethod = nil
+	/// Asks the service whether this account needs a password here (Matrix:
+	/// the homeserver may sign in through the browser, or there's a saved session).
+	private func checkPasswordNote(_ account: String) {
+		noteCheck?.cancel()
+		passwordNote = nil
 		let id = account.trimmingCharacters(in: .whitespaces).lowercased()
-		guard MatrixID.isUserID(id) else { return }
-		let homeserver = app.settings.matrixHomeserverURL
-		methodCheck = Task {
+		guard !id.isEmpty, app.profile.problem(withAccount: id) == nil else { return }
+		let profile = app.profile, homeserver = app.settings.matrixHomeserverURL
+		noteCheck = Task {
 			try? await Task.sleep(nanoseconds: 500_000_000)  // wait for typing to pause
-			guard !Task.isCancelled, let method = try? await MatrixClient.signInMethod(for: id, homeserver: homeserver),
-			      !Task.isCancelled else { return }
-			matrixMethod = method
-		}
-	}
-
-	/// Shown instead of the password box when a Matrix sign-in doesn't need one.
-	private var passwordNote: String? {
-		let server = MatrixID.serverName(of: email.lowercased()) ?? "your server"
-		switch matrixMethod {
-		case .browser?: return "Sign in opens your web browser, where \(server) asks for your password."
-		case .savedSession?: return "You're already signed in to \(server) on this computer."
-		default: return nil
+			guard !Task.isCancelled else { return }
+			let note = await profile.passwordNote(for: id, homeserver: homeserver)
+			if !Task.isCancelled { passwordNote = note }
 		}
 	}
 

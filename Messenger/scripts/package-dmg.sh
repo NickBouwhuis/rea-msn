@@ -1,13 +1,19 @@
 #!/bin/sh
-# Builds Messenger.app (see build-app.sh for ARCHS/VERSION/SIGN_IDENTITY) and
-# packages it as build/Messenger-$VERSION.dmg with an Applications link.
+# Builds Messenger.app (see build-app.sh for VARIANT/ARCHS/VERSION/SIGN_IDENTITY)
+# and packages it as build/Messenger-$VERSION.dmg with an Applications link
+# (VARIANT=matrix: Messenger for Matrix.app in build/MessengerForMatrix-$VERSION.dmg).
 # With App Store Connect API credentials it notarizes and staples the app, so
 # a copy taken out of the DMG passes Gatekeeper offline too, and then the DMG:
 #   NOTARY_KEY=/path/AuthKey_XXXX.p8 NOTARY_KEY_ID=XXXX NOTARY_ISSUER=<uuid>
 set -eu
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0}"
-DMG="build/Messenger-$VERSION.dmg"
+case "${VARIANT:-escargot}" in
+	matrix) NAME="Messenger for Matrix" FILE=MessengerForMatrix ;;
+	*) NAME=Messenger FILE=Messenger ;;
+esac
+APP="build/$NAME.app"
+DMG="build/$FILE-$VERSION.dmg"
 
 # Submits a file for notarization and fails, printing Apple's log, unless accepted.
 notarize() {
@@ -25,16 +31,16 @@ notarize() {
 ./scripts/build-app.sh
 
 if [ -n "${NOTARY_KEY:-}" ]; then
-	ditto -c -k --keepParent build/Messenger.app build/Messenger-notarize.zip
-	notarize build/Messenger-notarize.zip
-	xcrun stapler staple build/Messenger.app
+	ditto -c -k --keepParent "$APP" "build/$FILE-notarize.zip"
+	notarize "build/$FILE-notarize.zip"
+	xcrun stapler staple "$APP"
 fi
 
 rm -rf build/dmg
 mkdir -p build/dmg
-cp -R build/Messenger.app build/dmg/
+cp -R "$APP" build/dmg/
 ln -s /Applications build/dmg/Applications
-hdiutil create -volname Messenger -srcfolder build/dmg -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
+hdiutil create -volname "$NAME" -srcfolder build/dmg -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
 
 if [ "${SIGN_IDENTITY:--}" != "-" ]; then
 	codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"

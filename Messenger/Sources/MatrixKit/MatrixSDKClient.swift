@@ -24,17 +24,7 @@ public final class MatrixClient: IMService {
 		case savedSession
 	}
 
-	public enum VerificationEvent {
-		/// Whether this session is verified (cross-signed by you). Other people's
-		/// clients may not share keys with an unverified session.
-		case state(verified: Bool)
-		/// Another of your sessions asks to verify this one.
-		case requested(by: String)
-		/// Both sessions show these; compare them.
-		case emojis([(symbol: String, description: String)])
-		case finished
-		case cancelled(String?)
-	}
+	public typealias VerificationEvent = IMVerificationEvent
 
 	public private(set) var state: IMState = .signedOut
 	/// The Matrix user ID (@user:server); the front ends call it the e-mail address.
@@ -1144,6 +1134,8 @@ public final class MatrixClient: IMService {
 		try await client.encryption().recover(recoveryKey: recoveryKey.trimmingCharacters(in: .whitespacesAndNewlines))
 	}
 }
+
+extension MatrixClient: IMVerifying {}
 
 extension Presence {
 	var matrixPresence: PresenceState {

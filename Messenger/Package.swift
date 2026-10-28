@@ -1,11 +1,12 @@
 // swift-tools-version: 5.10
 import PackageDescription
 
-// One package, two front ends over the shared MSNKit protocol library:
-// a SwiftUI/AppKit app on macOS and a GTK4 app on Linux. MatrixKit puts the
-// same client surface (MSNKit's IMService) over Matrix: on macOS through
-// matrix-rust-sdk (end-to-end encryption, verification), on Linux for now
-// over the plain client-server API.
+// Two apps, each for macOS (SwiftUI/AppKit) and Linux (GTK4), from one set of
+// windows (MessengerUI, MessengerGTKUI) over MSNKit's IMService:
+// - Messenger: Escargot (MSNP15, MSNKit)
+// - Messenger for Matrix (MatrixMessenger*): MatrixKit, on macOS through
+//   matrix-rust-sdk (end-to-end encryption, verification), on Linux for now
+//   over the plain client-server API.
 var targets: [Target] = [
 	// zlib, for MSZIP-compressed wink cabinets (MSNKit/Util/Cabinet.swift).
 	.systemLibrary(name: "CZlib", providers: [.apt(["zlib1g-dev"])]),
@@ -26,17 +27,27 @@ targets += [
 	.target(name: "MSNKit", dependencies: ["CZlib", .product(name: "Crypto", package: "swift-crypto")]),
 	.target(name: "MatrixKit", dependencies: ["MSNKit"]),
 	.systemLibrary(name: "CGtk", pkgConfig: "gtk4", providers: [.apt(["libgtk-4-dev"])]),
-	.executableTarget(name: "MessengerGTK", dependencies: ["MSNKit", "MatrixKit", "CGtk"]),
+	.target(name: "MessengerGTKUI", dependencies: ["MSNKit", "CGtk"]),
+	.executableTarget(name: "MessengerGTK", dependencies: ["MessengerGTKUI", "MSNKit"]),
+	.executableTarget(name: "MatrixMessengerGTK", dependencies: ["MessengerGTKUI", "MatrixKit"]),
 ]
-products.append(.executable(name: "MessengerGTK", targets: ["MessengerGTK"]))
+products += [
+	.executable(name: "MessengerGTK", targets: ["MessengerGTK"]),
+	.executable(name: "MatrixMessengerGTK", targets: ["MatrixMessengerGTK"]),
+]
 #else
 dependencies.append(.package(url: "https://github.com/matrix-org/matrix-rust-components-swift", exact: "26.10.27"))
 targets += [
 	.target(name: "MSNKit", dependencies: ["CZlib"]),
 	.target(name: "MatrixKit", dependencies: ["MSNKit", .product(name: "MatrixRustSDK", package: "matrix-rust-components-swift")]),
-	.executableTarget(name: "Messenger", dependencies: ["MSNKit", "MatrixKit"]),
+	.target(name: "MessengerUI", dependencies: ["MSNKit"]),
+	.executableTarget(name: "Messenger", dependencies: ["MessengerUI", "MSNKit"]),
+	.executableTarget(name: "MatrixMessenger", dependencies: ["MessengerUI", "MatrixKit"]),
 ]
-products.append(.executable(name: "Messenger", targets: ["Messenger"]))
+products += [
+	.executable(name: "Messenger", targets: ["Messenger"]),
+	.executable(name: "MatrixMessenger", targets: ["MatrixMessenger"]),
+]
 #endif
 
 let package = Package(

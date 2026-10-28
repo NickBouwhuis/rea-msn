@@ -1,6 +1,7 @@
-# Builds the macOS DMG and the Ubuntu .debs on every push; a v* tag also
-# publishes them as a GitHub release. No Microsoft assets are involved: users
-# import those from their own installer after installing.
+# Builds the macOS DMG and the Ubuntu .debs of both apps (Messenger for
+# Escargot, Messenger for Matrix) on every push; a v* tag also publishes them
+# as a GitHub release. No Microsoft assets are involved: users import those
+# from their own installer after installing.
 #
 # Optional macOS signing/notarization secrets (unsigned, ad-hoc builds without):
 #   MACOS_CERTIFICATE           base64 of the Developer ID Application .p12
@@ -73,6 +74,8 @@ jobs:
           echo "NOTARY_ISSUER=$NOTARY_ISSUER" >> "$GITHUB_ENV"
       - name: Build DMG (universal)
         run: ARCHS="arm64 x86_64" Messenger/scripts/package-dmg.sh
+      - name: Build Messenger for Matrix DMG (universal)
+        run: VARIANT=matrix ARCHS="arm64 x86_64" Messenger/scripts/package-dmg.sh
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
@@ -131,16 +134,19 @@ jobs:
         run: |
           . "$HOME/.local/share/swiftly/env.sh"
           swift test
-      - name: Build .deb
+      - name: Build .debs
         run: |
           . "$HOME/.local/share/swiftly/env.sh"
           linux/scripts/package-deb.sh
+          VARIANT=matrix linux/scripts/package-deb.sh
       - name: Install check
         run: |
           SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
           $SUDO apt-get install -y ./build/*.deb
-          ! ldd /usr/bin/wlm-messenger | grep "not found"
-          dpkg -L wlm-messenger
+          for app in wlm-messenger wlm-messenger-matrix; do
+            ! ldd "/usr/bin/$app" | grep "not found"
+            dpkg -L "$app"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: ubuntu-${{ matrix.ubuntu }}-deb-${{ matrix.arch }}

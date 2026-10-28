@@ -6,7 +6,10 @@ This project reverse-engineers the Escargot build of Windows Live Messenger 8.1.
 ABCH protocols to the same Escargot servers. Both apps draw WLM 8.1's own UI resources, decoded from
 your installer.
 
-Project page: https://nickbouwhuis.github.io/rea-msn/
+The same windows also make a second app, **Messenger for Matrix**, which signs in to a Matrix
+account instead (see [Messenger for Matrix](#messenger-for-matrix)).
+
+Project pages: https://nickbouwhuis.github.io/rea-msn/ and https://nickbouwhuis.github.io/rea-msn/matrix/
 
 The reverse-engineering write-up, with addresses and evidence, is in
 [docs/RE-FINDINGS.md](docs/RE-FINDINGS.md).
@@ -15,10 +18,13 @@ The reverse-engineering write-up, with addresses and evidence, is in
 re/                    rea/Ghidra helpers, challenge oracle, DirectUI RLE decoder + skin compiler
 docs/RE-FINDINGS.md    what the binaries do and how each part maps to the ports
 Messenger/             Swift package
-  Sources/MSNKit       shared protocol library: MSNP15 NS/SB, Passport RST + MBI, CHL/QRY, ABCH, Storage
-  Sources/MatrixKit    the same client surface over Matrix (matrix-rust-sdk on macOS; experimental)
-  Sources/Messenger    macOS app (SwiftUI/AppKit)
-  Sources/MessengerGTK Linux app (GTK 4 via Sources/CGtk)
+  Sources/MSNKit       shared protocol library: MSNP15 NS/SB, Passport RST + MBI, CHL/QRY, ABCH, Storage;
+                       IMService (what the windows need from a service) and EscargotProfile
+  Sources/MatrixKit    IMService over Matrix (matrix-rust-sdk on macOS) and MatrixProfile
+  Sources/MessengerUI  macOS windows (SwiftUI/AppKit), shared by both macOS apps
+  Sources/MessengerGTKUI  Linux windows (GTK 4 via Sources/CGtk), shared by both Linux apps
+  Sources/Messenger, MessengerGTK              the Escargot apps (macOS, Linux)
+  Sources/MatrixMessenger, MatrixMessengerGTK  Messenger for Matrix (macOS, Linux)
   Sources/msnctl       CLI: sign in, send messages, run the end-to-end scenario
   Tests/               unit tests pinned to server-generated and decompiled-code vectors
   scripts/             macOS: build-app.sh, package-dmg.sh, import-wlm-assets.sh, import-wlm-sounds.sh
@@ -125,16 +131,21 @@ another host.
 Not supported: voice and video calls. WLM 8.1 sets those up with direct connections that Escargot
 doesn't relay. See the RE notes for details.
 
-## Matrix (experimental)
+## Messenger for Matrix
 
-Sign in with a Matrix ID such as `@you:matrix.org` instead of an e-mail address, and the same
-windows talk to a Matrix homeserver through MatrixKit. On macOS that runs on
+A second app from the same windows: Messenger for Matrix signs in with a Matrix ID such as
+`@you:matrix.org`, through MatrixKit. It has its own app bundle (`Messenger for Matrix.app`,
+`local.messengermac.matrix`) and Linux package (`wlm-messenger-matrix`), its own settings, and shares
+the imported WLM look with the Escargot app. Build it with `VARIANT=matrix` and the same scripts
+(`build-app.sh`, `package-dmg.sh`, `linux/scripts/install.sh`, `package-deb.sh`), or run it with
+`swift run MatrixMessenger` / `MatrixMessengerGTK`. The Escargot app doesn't link the Matrix SDK.
+
+On macOS it runs on
 [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-components-swift), the engine Element X
 uses, so conversations are end-to-end encrypted and your existing Element chats work. Linux still
 uses a plain client-server client without encryption, until the SDK is built there. The homeserver
-is found through the server's
-`.well-known`; to set one by hand, use the field under "Connect to" (macOS) or "Matrix homeserver..."
-in the service menu (Linux). When the homeserver signs people in through the browser (SSO, such as
+is found through the server's `.well-known`; to set one by hand, use the "Homeserver" link under the
+sign-in form. When the homeserver signs people in through the browser (SSO, such as
 MAS), the sign-in window notices and drops the password box: "Sign in" opens the homeserver's page in
 your browser, which sends a one-time token back to Messenger on a 127.0.0.1 port. WLM concepts map
 onto Matrix like this:

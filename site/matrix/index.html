@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messenger for Matrix: Windows Live Messenger 8.1 on Matrix</title>
+<meta name="description" content="Windows Live Messenger 8.1, rebuilt for macOS and Ubuntu, signed in to your Matrix account: end-to-end encrypted chats with your Element contacts, nudges, fonts and emoticons included.">
+<style>
+:root {
+	--header-blue: #063878;
+	--teal: #347FA2;
+	--mist: #ECF3F6;
+	--ink: #333333;
+	--muted: #777777;
+	--link: #0076C6;
+	--online: #4CA22F;
+	--offline: #9AA3A8;
+	--line: #C9DCE6;
+	--white: #FFFFFF;
+	--face: Tahoma, Verdana, "DejaVu Sans", "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+	margin: 0;
+	background: var(--mist);
+	color: var(--ink);
+	font: 16px/1.6 var(--face);
+}
+a { color: var(--link); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid #F2B21B; outline-offset: 2px; border-radius: 2px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+.prose { max-width: 66ch; }
+code, pre { font-family: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 14px; }
+
+/* Header band: WLM's header gradient with hand-drawn "vapor" swooshes. */
+.band {
+	position: relative;
+	overflow: hidden;
+	color: var(--white);
+	background: linear-gradient(180deg, var(--header-blue) 0%, #0D4F8E 34%, var(--teal) 70%, #7FB3C8 90%, var(--mist) 100%);
+	padding-bottom: 72px;
+}
+.band svg.vapor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding-top: 20px; position: relative; }
+.mark { font-weight: bold; font-size: 18px; color: var(--white); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.mark .dot { width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #B7F08F, var(--online) 60%, #2E6E19); box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.topbar nav a { color: var(--white); margin-left: 22px; font-size: 15px; text-decoration: none; opacity: .9; }
+.topbar nav a:hover { opacity: 1; text-decoration: underline; }
+
+.hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 490px; gap: 56px; align-items: center; padding-top: 64px; }
+.hero h1 { font-size: 52px; line-height: 1.08; letter-spacing: -0.025em; margin: 0 0 20px; font-weight: bold; text-shadow: 0 1px 0 rgba(0,0,0,.18); }
+.hero .lede { font-size: 18px; line-height: 1.55; margin: 0 0 32px; max-width: 34em; color: #F2F8FB; }
+.lede a { color: var(--white); }
+
+.downloads { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.button {
+	display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px;
+	font: bold 16px/1 var(--face); color: #0B2F5C; text-decoration: none;
+	padding: 13px 20px; border-radius: 4px; cursor: pointer;
+	background: linear-gradient(#FFFFFF, #E4EEF4 48%, #D3E3EC 52%, #E9F2F7);
+	border: 1px solid #6E95AF;
+	box-shadow: inset 0 1px 0 #FFFFFF, 0 1px 2px rgba(0,30,60,.25);
+}
+.button:hover { background: linear-gradient(#FFFFFF, #EAF6FC 48%, #CDE8F6 52%, #E8F6FD); border-color: #3C7FB1; }
+.button:active { background: linear-gradient(#D2E4EE, #E4EEF4); }
+.button small { font-weight: normal; color: #44617A; font-size: 13px; line-height: 1.2; }
+details.debs { position: relative; }
+details.debs summary { list-style: none; }
+details.debs summary::-webkit-details-marker { display: none; }
+details.debs .menu {
+	position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; min-width: 300px;
+	background: var(--white); color: var(--ink); border: 1px solid #8DA9BC; border-radius: 3px;
+	box-shadow: 0 6px 18px rgba(0,30,60,.25); padding: 4px; font-size: 14px;
+}
+.menu a { display: block; padding: 7px 10px; color: var(--ink); text-decoration: none; border: 1px solid transparent; border-radius: 2px; }
+.menu a:hover, .menu a:focus-visible { background: #E5F3FB; border-color: #A9D3EE; }
+.menu a span { color: var(--muted); }
+.release-note { margin: 14px 0 0; font-size: 14px; color: #DCEBF3; }
+.release-note a { color: var(--white); }
+
+/* The conversation window. */
+.convo {
+	background: var(--white);
+	border-radius: 7px 7px 4px 4px;
+	box-shadow: 0 0 0 1px rgba(10,40,70,.45), 0 18px 40px rgba(0,25,55,.35);
+	overflow: hidden;
+	color: var(--ink);
+	font-size: 13px;
+}
+.convo .title {
+	display: flex; align-items: center; justify-content: space-between;
+	padding: 8px 10px 26px;
+	background: linear-gradient(180deg, #0A3F80, #2D79A5 55%, #B9D8E5 88%, #E6F1F5);
+	color: var(--white);
+}
+.convo .title b { font-size: 13px; }
+.convo .title span { opacity: .85; font-size: 12px; }
+.convo .frame { display: flex; gap: 5px; }
+.convo .frame i { width: 12px; height: 10px; border: 1.5px solid rgba(255,255,255,.75); border-radius: 2px; display: block; }
+.convo .frame i:first-child { border-width: 0 0 1.5px; height: 8px; }
+.convo .body { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 10px; padding: 0 10px 10px; margin-top: -16px; }
+.history {
+	height: 236px; overflow: hidden; background: var(--white);
+	border: 1px solid #BED6E0; padding: 8px 10px; line-height: 1.5;
+}
+.history .says { color: var(--muted); margin-top: 6px; }
+.history .says:first-child { margin-top: 0; }
+.history .msg { padding-left: 14px; }
+.history .nudge { font-weight: bold; margin-top: 6px; }
+.history .notice { color: var(--muted); }
+/* Messenger's emoticons: 19 px cells; animated ones step through their strip
+   every 250 ms like the client, looping or once (then back to frame 0). */
+.emo { display: inline-block; width: 19px; height: 19px; vertical-align: -5px; margin: 0 1px; }
+span.emo {
+	width: var(--w, 19px); background-repeat: no-repeat;
+	animation: emo calc(var(--frames) * 250ms) steps(var(--frames)) var(--count, infinite);
+}
+@keyframes emo { to { background-position: calc(-1 * var(--w, 19px) * var(--frames)) 0; } }
+/* Messenger's default display picture, at its own 96 px in a 3 px white frame. */
+.tile { border: 1px solid #D8D9D9; padding: 3px; background: var(--white); line-height: 0; }
+.tile img { width: 96px; height: 96px; }
+.pictures { display: flex; flex-direction: column; justify-content: space-between; }
+.status { color: var(--muted); font-size: 12px; padding: 4px 0 6px; min-height: 26px; }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.composer .box { border: 1px solid #BED6E0; height: 52px; padding: 6px 8px; color: var(--muted); }
+.composer button {
+	font: bold 12px/1 var(--face); color: #0B2F5C; padding: 0 12px; border-radius: 3px; cursor: pointer;
+	background: linear-gradient(#FFFFFF, #E4EEF4 48%, #D3E3EC 52%, #E9F2F7); border: 1px solid #8DA9BC;
+}
+.composer button:hover { border-color: #3C7FB1; }
+@keyframes shake {
+	0%, 100% { transform: translate(0, 0); }
+	10% { transform: translate(-9px, 3px); } 20% { transform: translate(8px, -4px); }
+	30% { transform: translate(-7px, -2px); } 40% { transform: translate(7px, 3px); }
+	50% { transform: translate(-5px, 2px); } 60% { transform: translate(5px, -3px); }
+	70% { transform: translate(-3px, 1px); } 80% { transform: translate(2px, -1px); }
+}
+.convo.shaking { animation: shake .55s linear; }
+
+/* Sections */
+main section { padding: 64px 0 8px; }
+h2 { font-size: 30px; line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 14px; color: var(--header-blue); }
+h3 { font-size: 18px; margin: 0 0 6px; color: var(--header-blue); }
+p { margin: 0 0 16px; }
+
+ol.steps { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; counter-reset: step; }
+ol.steps li { counter-increment: step; position: relative; padding-top: 52px; }
+ol.steps li::before {
+	content: counter(step); position: absolute; top: 0; left: 0;
+	width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+	font: bold 18px/1 var(--face); color: var(--white);
+	background: radial-gradient(circle at 35% 30%, #5FA3D6, var(--header-blue));
+	box-shadow: 0 0 0 3px #D6E7F0;
+}
+ol.steps p { font-size: 15px; }
+pre {
+	margin: 10px 0 14px; padding: 12px 14px; overflow-x: auto;
+	background: var(--white); border: 1px solid var(--line); border-radius: 3px; line-height: 1.5;
+}
+.os-label { font-size: 13px; color: var(--muted); margin: 12px 0 -4px; }
+.commands { margin-top: 30px; }
+
+/* What works, as a contact list. */
+.list {
+	margin-top: 26px; background: var(--white); border: 1px solid var(--line); border-radius: 4px;
+	padding: 10px 6px 14px; max-width: 760px;
+}
+.group { font-weight: bold; padding: 8px 10px 4px; display: flex; align-items: center; gap: 8px; }
+.group::before { content: ""; border: 5px solid transparent; border-top: 6px solid #6B7C86; margin-top: 5px; }
+.buddy { display: flex; gap: 12px; align-items: baseline; padding: 5px 10px 5px 30px; border-radius: 3px; }
+.buddy:hover { background: #E5F3FB; }
+.buddy::before {
+	content: ""; flex: none; width: 11px; height: 11px; border-radius: 50%; position: relative; top: 1px;
+	background: radial-gradient(circle at 35% 30%, #C4F2A2, var(--online) 60%, #2E6E19);
+}
+.buddy.off::before { background: radial-gradient(circle at 35% 30%, #F1F3F4, var(--offline) 60%, #6F787D); }
+.buddy b { font-weight: normal; }
+.buddy span { color: var(--muted); font-size: 14px; }
+.buddy span::before { content: "– "; }
+
+dl.findings { margin: 24px 0 0; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px 28px; max-width: 860px; }
+dl.findings dt { font-weight: bold; color: var(--header-blue); }
+dl.findings dd { margin: 0; }
+
+.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; margin-top: 18px; }
+
+footer { margin-top: 80px; padding: 28px 0 40px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+footer p { max-width: 80ch; }
+
+@media (max-width: 960px) {
+	.hero { grid-template-columns: 1fr; gap: 40px; padding-top: 40px; }
+	.hero h1 { font-size: 40px; }
+	.convo { max-width: 490px; }
+	ol.steps, .columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+	.wrap { padding: 0 16px; }
+	.hero h1 { font-size: 32px; }
+	.hero .lede { font-size: 16px; }
+	.topbar nav a { margin-left: 14px; }
+	.convo .body { grid-template-columns: 1fr; }
+	.pictures { display: none; }
+	dl.findings { grid-template-columns: 1fr; gap: 4px; }
+	dl.findings dd { margin-bottom: 12px; }
+	details.debs .menu { min-width: 0; width: calc(100vw - 32px); }
+	.buddy { flex-wrap: wrap; gap: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.convo.shaking, span.emo { animation: none; }
+}
+
+/* Screenshots of the app itself. */
+.shot { margin: 0; line-height: 0; }
+.shot img { max-width: 100%; height: auto; border-radius: 7px 7px 4px 4px; box-shadow: 0 0 0 1px rgba(10,40,70,.45), 0 18px 40px rgba(0,25,55,.35); }
+.hero .shot img { width: 490px; }
+.gallery { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 40px; align-items: start; margin-top: 30px; }
+.gallery figcaption, .caption { font-size: 14px; color: var(--muted); line-height: 1.5; margin-top: 10px; }
+.gallery .side { display: grid; gap: 28px; }
+.gallery .signin img { width: 310px; }
+.gallery .verify img { width: 400px; }
+.crumb { font-size: 14px; margin: 0 0 14px; }
+.crumb a { color: #DCEBF3; }
+@media (max-width: 960px) {
+	.gallery { grid-template-columns: 1fr; }
+	.hero .shot img { width: 100%; max-width: 490px; }
+}
+</style>
+</head>
+<body>
+<header class="band">
+	<svg class="vapor" viewBox="0 0 1440 640" preserveAspectRatio="none" aria-hidden="true">
+		<path d="M-40 420 C 260 300, 560 520, 900 360 S 1380 250, 1500 330" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="2"/>
+		<path d="M-40 460 C 300 330, 620 560, 960 400 S 1400 300, 1500 370" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="1.5"/>
+		<path d="M-40 500 C 340 380, 640 600, 1000 440 S 1420 350, 1500 410" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+		<path d="M820 -20 C 980 120, 1180 90, 1500 230 L 1500 -20 Z" fill="rgba(255,255,255,.06)"/>
+		<path d="M1000 -20 C 1120 70, 1300 60, 1500 130 L 1500 -20 Z" fill="rgba(255,255,255,.06)"/>
+	</svg>
+	<div class="wrap">
+		<div class="topbar">
+			<a class="mark" href="../"><span class="dot" aria-hidden="true"></span>rea-msn</a>
+			<nav aria-label="Project">
+				<a href="../">Messenger for Escargot</a>
+				<a href="https://github.com/NickBouwhuis/rea-msn">GitHub</a>
+				<a href="https://github.com/NickBouwhuis/rea-msn/releases">Releases</a>
+			</nav>
+		</div>
+		<div class="hero">
+			<div>
+				<h1>Windows Live Messenger 8.1, on Matrix</h1>
+				<p class="lede">The rebuilt 2007 Messenger client, signed in to your <a href="https://matrix.org">Matrix</a> account instead of MSN. Your direct chats become your contact list, encrypted end to end like they are in Element, and Messenger's nudges, fonts and emoticons come along.</p>
+				<div class="downloads">
+					<a class="button" href="https://github.com/NickBouwhuis/rea-msn/releases/latest">Download for macOS <small>14 or later</small></a>
+					<a class="button" href="https://github.com/NickBouwhuis/rea-msn/releases/latest">Download for Ubuntu <small>24.04 or 26.04</small></a>
+				</div>
+				<p class="release-note">Free and open source. Look for <code>MessengerForMatrix-…dmg</code> and <code>wlm-messenger-matrix_….deb</code> on the releases page.</p>
+			</div>
+			<figure class="shot">
+				<img src="conversation.png" width="560" height="520" alt="A Messenger for Matrix conversation window: Bob says &quot;Look, I have a display picture now&quot;, with both people's Matrix avatars as display pictures.">
+			</figure>
+		</div>
+	</div>
+</header>
+
+<main class="wrap">
+	<section id="start" aria-labelledby="start-h">
+		<h2 id="start-h">Get started</h2>
+		<p class="prose">Like Messenger for Escargot, the app ships none of Microsoft's artwork. You import it once from the original installer, and both apps share it.</p>
+		<ol class="steps">
+			<li>
+				<h3>Install the app</h3>
+				<p>Open the DMG and drag Messenger for Matrix to Applications, or install the <code>.deb</code> for your Ubuntu release. The first time you open it on a Mac, allow it under System Settings › Privacy &amp; Security.</p>
+			</li>
+			<li>
+				<h3>Import the look</h3>
+				<p>Download the Windows Live Messenger 8.1 installer (<code>escargot-wlm-8.1.0178-en.msi</code>) from <a href="https://escargot.chat">Escargot</a> and run the importer on it. If you use the Escargot app too, it's already done.</p>
+			</li>
+			<li>
+				<h3>Sign in and verify</h3>
+				<p>Sign in with your Matrix ID, such as <code>@you:matrix.org</code>. If your homeserver signs in through the browser, Messenger opens it for you. Then verify the session with Element's emoji or your recovery key, so your other sessions share their keys with it.</p>
+			</li>
+		</ol>
+		<div class="commands">
+			<p class="os-label">On macOS, after <code>brew install sevenzip ffmpeg</code></p>
+<pre><code>"/Applications/Messenger for Matrix.app/Contents/Resources/import/Messenger/scripts/import-wlm-assets.sh" \
+    ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre>
+			<p class="os-label">On Ubuntu</p>
+<pre><code>sudo apt install ./wlm-messenger-matrix_*.deb
+wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre>
+		</div>
+		<div class="gallery">
+			<figure class="shot signin">
+				<img src="signin.png" width="310" height="700" alt="The sign-in window, asking for a Matrix ID and password, with the homeserver found from the Matrix ID.">
+				<figcaption>Sign in with a Matrix ID. The homeserver is found from it, or set by hand.</figcaption>
+			</figure>
+			<div class="side">
+				<figure class="shot verify">
+					<img src="verify.png" width="400" height="180" alt="The Verify this session window, offering Not now, Use recovery key and Use another session.">
+					<figcaption>A new session asks to be verified: compare emoji with Element, or enter your recovery key.</figcaption>
+				</figure>
+				<p class="caption">Under the hood it runs on <a href="https://github.com/matrix-org/matrix-rust-sdk">matrix-rust-sdk</a>, the engine Element X uses, so encryption, cross-signing and key backup work the way they do there.</p>
+			</div>
+		</div>
+	</section>
+
+	<section id="features" aria-labelledby="features-h">
+		<h2 id="features-h">What works</h2>
+		<p class="prose">One-to-one chats with anyone on Matrix, encrypted, in Messenger's windows.</p>
+		<div class="list" role="list">
+			<div class="group">Works (11)</div>
+			<div class="buddy" role="listitem"><b>Sign in</b><span>with a password, or through your homeserver's own sign-in page in the browser</span></div>
+			<div class="buddy" role="listitem"><b>End-to-end encryption</b><span>your existing Element chats, and new chats start encrypted</span></div>
+			<div class="buddy" role="listitem"><b>Verify this session</b><span>emoji with another session, or your recovery key</span></div>
+			<div class="buddy" role="listitem"><b>Contacts</b><span>your direct chats; adding someone invites them, and their invites show as "has added you"</span></div>
+			<div class="buddy" role="listitem"><b>Status and personal message</b><span>your Matrix presence and status message</span></div>
+			<div class="buddy" role="listitem"><b>Conversations</b><span>fonts and colours, "is typing a message", nudges that shake the window</span></div>
+			<div class="buddy" role="listitem"><b>Pictures</b><span>paste or drop one into the message box; received ones show in the conversation</span></div>
+			<div class="buddy" role="listitem"><b>Message history</b><span>the last messages before you signed in, decrypted with keys from your other sessions</span></div>
+			<div class="buddy" role="listitem"><b>Display pictures</b><span>your Matrix avatar and your contacts'</span></div>
+			<div class="buddy" role="listitem"><b>Block</b><span>Matrix's ignore list, shared with your other apps</span></div>
+			<div class="buddy" role="listitem"><b>Remember me</b><span>stays the same, verified session between launches</span></div>
+			<div class="group">Not yet (4)</div>
+			<div class="buddy off" role="listitem"><b>Group rooms</b><span>only one-to-one chats appear for now</span></div>
+			<div class="buddy off" role="listitem"><b>Encryption on Ubuntu</b><span>the Linux app speaks plain Matrix until matrix-rust-sdk is built for it</span></div>
+			<div class="buddy off" role="listitem"><b>Other files</b><span>pictures only</span></div>
+			<div class="buddy off" role="listitem"><b>Voice and video</b></div>
+		</div>
+	</section>
+
+	<section id="how" aria-labelledby="how-h">
+		<h2 id="how-h">Messenger, mapped onto Matrix</h2>
+		<p class="prose">Matrix has no contact list or nudges, so Messenger's ideas are built from what it has. Other Matrix apps see ordinary messages; two copies of Messenger also share fonts and nudges.</p>
+		<dl class="findings">
+			<dt>Contact list</dt>
+			<dd>The people you have direct chats with (<code>m.direct</code>).</dd>
+			<dt>"Has added you"</dt>
+			<dd>An invite to a direct chat. Declining leaves it and blocks the sender, as Messenger did.</dd>
+			<dt>Status</dt>
+			<dd>Matrix presence: Online, Away for the away-type statuses, Offline for Appear Offline. The personal message is the presence status message.</dd>
+			<dt>Fonts and colours</dt>
+			<dd>Sent as formatted text, so they show in Element, plus Messenger's own font description for other copies of Messenger.</dd>
+			<dt>Nudges</dt>
+			<dd>An emote, "* Alice just sent you a nudge.", that Messenger recognises and shakes the window for.</dd>
+		</dl>
+	</section>
+
+	<section id="source" aria-labelledby="source-h">
+		<h2 id="source-h">Build it yourself</h2>
+		<p class="prose">The same Swift package as the Escargot app: both apps share their windows and differ only in the service they sign in to. A Docker Synapse lets you test against your own machine.</p>
+<pre><code>git clone https://github.com/NickBouwhuis/rea-msn.git
+cd rea-msn/Messenger
+swift run MatrixMessenger                  # macOS
+swift run MatrixMessengerGTK               # Linux
+docker compose -f ../devserver/matrix/docker-compose.yml up -d   # a local Synapse on :8008</code></pre>
+	</section>
+</main>
+
+<footer>
+	<div class="wrap">
+		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft or the Matrix.org Foundation. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. The screenshots show that look (© Microsoft) with test accounts on a local homeserver.</p>
+	</div>
+</footer>
+</body>
+</html>

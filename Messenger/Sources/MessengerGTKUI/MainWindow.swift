@@ -1,6 +1,5 @@
 import CGtk
 import Foundation
-import MatrixKit
 import MSNKit
 
 /// The Messenger main window: sign-in (UIFILE 947) and contact list
@@ -16,10 +15,10 @@ final class MainWindow {
 	private var emailEntry: Ptr!
 	private var passwordEntry: Ptr!
 	private var passwordLabel: Ptr!
-	/// Replaces the password box when a Matrix homeserver signs in through the browser.
+	/// Replaces the password box when this account needs none here (Matrix: browser sign-in).
 	private var browserNote: Ptr!
-	private var matrixMethod: MatrixClient.SignInMethod?
-	private var methodCheck: Task<Void, Never>?
+	private var passwordNote: String?
+	private var noteCheck: Task<Void, Never>?
 	private var statusLabel: Ptr!
 	private var statusPopover: Ptr!
 	private var rememberMe: Ptr!
@@ -81,7 +80,8 @@ final class MainWindow {
 		margins(errorLabel, bottom: 8)
 		append(form, errorLabel)
 
-		append(form, label(skin.string(61279, "E-mail address:"), css: ["wlm-label"]))
+		let profile = state.profile
+		append(form, label(profile.connection == .msnServer ? skin.string(61279, profile.accountLabel) : profile.accountLabel, css: ["wlm-label"]))
 		let emailRow = hbox(0, css: ["wlm-input"])
 		emailEntry = raw(gtk_entry_new())
 		gtk_entry_set_has_frame(c(emailEntry), 0)
@@ -110,7 +110,7 @@ final class MainWindow {
 		margins(browserNote, bottom: 5)
 		visible(browserNote, false)
 		append(form, browserNote)
-		on(emailEntry, "changed") { [weak self] in self?.checkSignInMethod() }
+		on(emailEntry, "changed") { [weak self] in self?.checkPasswordNote() }
 
 		let statusRow = hbox(4)
 		append(statusRow, label(skin.string(61286, "Status:"), css: ["wlm-label"]))
@@ -164,8 +164,8 @@ final class MainWindow {
 		let links = vbox(0)
 		gtk_widget_set_size_request(c(links), 226, -1)
 		align(links, h: GTK_ALIGN_CENTER)
-		append(links, link(skin.string(61301, "Forgot your password?"), "https://escargot.chat/forgot/"))
-		append(links, link(skin.string(61303, "Service status"), "https://escargot.chat/"))
+		if let url = state.profile.forgotPasswordURL { append(links, link(skin.string(61301, "Forgot your password?"), url.absoluteString)) }
+		if let url = state.profile.serviceStatusURL { append(links, link(skin.string(61303, "Service status"), url.absoluteString)) }
 		append(links, serverPicker())
 		margins(links, bottom: 12)
 		append(page, links)
@@ -220,34 +220,34 @@ final class MainWindow {
 	}
 
 	private func signIn() {
-		let browser = matrixMethod == .browser
-		state.signIn(email: text(of: emailEntry), password: browser ? "" : text(of: passwordEntry), status: signInStatus,
-		             rememberMe: isActive(rememberMe), rememberPassword: isActive(rememberPassword) && !browser)
+		let noPassword = passwordNote != nil
+		state.signIn(email: text(of: emailEntry), password: noPassword ? "" : text(of: passwordEntry), status: signInStatus,
+		             rememberMe: isActive(rememberMe), rememberPassword: isActive(rememberPassword) && !noPassword)
 	}
 
-	/// For a Matrix ID, asks its homeserver whether it takes passwords or signs in through the browser.
-	private func checkSignInMethod() {
-		methodCheck?.cancel()
-		showSignInMethod(nil)
+	/// Asks the service whether this account needs a password here (Matrix:
+	/// the homeserver may sign in through the browser).
+	private func checkPasswordNote() {
+		noteCheck?.cancel()
+		showPasswordNote(nil)
 		let id = text(of: emailEntry).trimmingCharacters(in: .whitespaces).lowercased()
-		guard MatrixID.isUserID(id) else { return }
-		let homeserver = state.settings.matrixHomeserverURL
-		methodCheck = Task { [weak self] in
+		guard !id.isEmpty, state.profile.problem(withAccount: id) == nil else { return }
+		let profile = state.profile, homeserver = state.settings.matrixHomeserverURL
+		noteCheck = Task { [weak self] in
 			try? await Task.sleep(nanoseconds: 500_000_000)  // wait for typing to pause
-			guard !Task.isCancelled, let method = try? await MatrixClient.signInMethod(for: id, homeserver: homeserver),
-			      !Task.isCancelled else { return }
-			self?.showSignInMethod(method, server: MatrixID.serverName(of: id))
+			guard !Task.isCancelled else { return }
+			let note = await profile.passwordNote(for: id, homeserver: homeserver)
+			if !Task.isCancelled { self?.showPasswordNote(note) }
 		}
 	}
 
-	private func showSignInMethod(_ method: MatrixClient.SignInMethod?, server: String? = nil) {
-		matrixMethod = method
-		let browser = method == .browser
-		visible(passwordLabel, !browser)
-		visible(passwordEntry, !browser)
-		visible(browserNote, browser)
-		setText(browserNote, "Sign in opens your web browser, where \(server ?? "your server") asks for your password.")
-		gtk_widget_set_sensitive(c(rememberPassword), browser ? 0 : 1)
+	private func showPasswordNote(_ note: String?) {
+		passwordNote = note
+		visible(passwordLabel, note == nil)
+		visible(passwordEntry, note == nil)
+		visible(browserNote, note != nil)
+		setText(browserNote, note ?? "")
+		gtk_widget_set_sensitive(c(rememberPassword), note == nil ? 1 : 0)
 	}
 
 	private func phaseChanged() {
@@ -478,6 +478,7 @@ final class MainWindow {
 
 	/// Which Escargot server to sign in to (the macOS app's service picker).
 	private func serverPicker() -> Ptr {
+		if state.profile.connection == .matrixHomeserver { return homeserverPicker() }
 		let name = label("", css: ["wlm-hint"])
 		let show = { [weak self] in
 			guard let self else { return }
@@ -505,26 +506,39 @@ final class MainWindow {
 				}
 			})
 		}
-		append(items, menuItem("Matrix homeserver...") { [weak self] in
-			guard let self else { return }
-			popdown(pop)
-			Dialog.prompt(title: "Matrix homeserver",
-			              message: "Sign in with a Matrix ID (@you:matrix.org) to use Matrix. Leave this blank to find the homeserver automatically.",
-			              placeholder: "https://matrix.example.org", text: self.state.settings.matrixHomeserver ?? "",
-			              ok: "OK", parent: self.window) { url in
-				let u = url.trimmingCharacters(in: .whitespaces)
-				self.state.settings.matrixHomeserver = u.isEmpty ? nil : u
-			}
-		})
 		align(picker, h: GTK_ALIGN_START)
 		return picker
 	}
 
+	/// Matrix: the homeserver, found from the Matrix ID unless set here.
+	private func homeserverPicker() -> Ptr {
+		let name = label("", css: ["wlm-hint"])
+		let show = { [weak self] in
+			guard let self else { return }
+			setText(name, "Homeserver: \(self.state.settings.matrixHomeserverURL?.host ?? "found from your Matrix ID")")
+		}
+		show()
+		return button(name, css: ["wlm-flat"]) { [weak self] in
+			guard let self else { return }
+			Dialog.prompt(title: "Matrix homeserver", message: "Leave this empty to find your homeserver from your Matrix ID.",
+			              placeholder: "https://matrix.example.org", text: self.state.settings.matrixHomeserver ?? "",
+			              ok: "OK", parent: self.window) { url in
+				let u = url.trimmingCharacters(in: .whitespaces)
+				self.state.settings.matrixHomeserver = u.isEmpty ? nil : u
+				show()
+			}
+		}
+	}
+
 	private func promptAddContact() {
 		Dialog.prompt(title: skin.string(45278, "Add a Contact"), message: "Instant messaging address:",
-		              placeholder: "someone@escargot.chat", ok: "Add contact", parent: window) { email in
+		              placeholder: state.profile.contactExample, ok: "Add contact", parent: window) { [weak self] email in
 			let e = email.trimmingCharacters(in: .whitespaces)
-			if e.contains("@") { AppState.shared.addContact(e) }
+			if let problem = AppState.shared.profile.problem(withContact: e) {
+				Dialog.alert(problem, parent: self?.window)
+			} else {
+				AppState.shared.addContact(e)
+			}
 		}
 	}
 
@@ -575,5 +589,5 @@ enum StatusIcon {
 
 /// Disambiguates the free `picture` builder from the static method above.
 enum CGtkBridge {
-	static func picture(_ path: String?) -> Ptr { MessengerGTK.picture(path) }
+	static func picture(_ path: String?) -> Ptr { MessengerGTKUI.picture(path) }
 }

@@ -7,6 +7,8 @@
 # differ between releases (libxml2.so.2 on 24.04, .so.16 on 26.04), so build
 # once per Ubuntu release; the version carries it, e.g. 1.2.3~ubuntu24.04.
 #   VERSION=1.2.3 linux/scripts/package-deb.sh
+# VARIANT=matrix packages Messenger for Matrix (MatrixMessengerGTK) as
+# wlm-messenger-matrix instead.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -17,13 +19,24 @@ MAINTAINER="${MAINTAINER:-NickBouwhuis <NickBouwhuis@users.noreply.github.com>}"
 ARCH="$(dpkg --print-architecture)"
 DIST="$(. /etc/os-release && echo "$ID$VERSION_ID")"
 DEB_VERSION="$VERSION~$DIST"
-NAME=wlm-messenger
-APP_ID=chat.messenger.wlm81
+case "${VARIANT:-escargot}" in
+	matrix)
+		PRODUCT=MatrixMessengerGTK NAME=wlm-messenger-matrix APP_ID=chat.messenger.wlm81.matrix
+		TITLE="Messenger for Matrix" COMMENT="Chat with your Matrix contacts"
+		SUMMARY="Windows Live Messenger 8.1-style client for Matrix"
+		ABOUT="the Matrix client-server API" ;;
+	escargot)
+		PRODUCT=MessengerGTK NAME=wlm-messenger APP_ID=chat.messenger.wlm81
+		TITLE="Windows Live Messenger" COMMENT="Chat with your Escargot (MSN) contacts"
+		SUMMARY="Windows Live Messenger 8.1-style client for the Escargot (MSN) service"
+		ABOUT="MSNP15 to Escargot" ;;
+	*) echo "VARIANT is escargot or matrix" >&2; exit 2 ;;
+esac
 STAGE="$(mktemp -d)"   # package root
 SHLIBS="$(mktemp -d)"  # scratch for dpkg-shlibdeps
 
-swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --product MessengerGTK
-BIN="$(swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --show-bin-path)/MessengerGTK"
+swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --product "$PRODUCT"
+BIN="$(swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --show-bin-path)/$PRODUCT"
 install -D -m 755 "$BIN" "$STAGE/usr/bin/$NAME"
 strip "$STAGE/usr/bin/$NAME"
 
@@ -43,8 +56,8 @@ install -d "$STAGE/usr/share/applications"
 cat > "$STAGE/usr/share/applications/$APP_ID.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Windows Live Messenger
-Comment=Chat with your Escargot (MSN) contacts
+Name=$TITLE
+Comment=$COMMENT
 Exec=$NAME
 Icon=$APP_ID
 Categories=Network;InstantMessaging;
@@ -70,9 +83,9 @@ Depends: $DEPENDS
 Recommends: 7zip | p7zip-full, python3, ffmpeg, libsecret-tools
 Section: net
 Priority: optional
-Description: Windows Live Messenger 8.1-style client for the Escargot (MSN) service
+Description: $SUMMARY
  A native GTK 4 reimplementation of Windows Live Messenger 8.1 that speaks
- MSNP15 to Escargot. Run wlm-messenger-import with your own WLM 8.1 installer
+ $ABOUT. Run $NAME-import with your own WLM 8.1 installer
  (.msi) to import the original look, emoticons and sounds; none are included.
 EOF
 

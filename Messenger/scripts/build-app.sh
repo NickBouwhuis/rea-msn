@@ -1,5 +1,6 @@
 #!/bin/sh
 # Builds build/Messenger.app (release). Environment:
+#   VARIANT=matrix         build/Messenger for Matrix.app instead (default: escargot)
 #   ARCHS="arm64 x86_64"   universal binary (default: this Mac's architecture)
 #   VERSION=1.2.3          CFBundleShortVersionString (default 0.0.0; "~suffix" is dropped)
 #   BUILD_NUMBER=42        CFBundleVersion (default 1)
@@ -10,13 +11,19 @@ VERSION="${VERSION:-0.0.0}"
 ARCH_FLAGS=""
 for arch in ${ARCHS:-}; do ARCH_FLAGS="$ARCH_FLAGS --arch $arch"; done
 
-swift build -c release $ARCH_FLAGS --product Messenger
-BIN="$(swift build -c release $ARCH_FLAGS --show-bin-path)/Messenger"
+case "${VARIANT:-escargot}" in
+	matrix) PRODUCT=MatrixMessenger NAME="Messenger for Matrix" BUNDLE_ID=local.messengermac.matrix ;;
+	escargot) PRODUCT=Messenger NAME=Messenger BUNDLE_ID=local.messengermac ;;
+	*) echo "VARIANT is escargot or matrix" >&2; exit 2 ;;
+esac
 
-APP=build/Messenger.app
+swift build -c release $ARCH_FLAGS --product "$PRODUCT"
+BIN="$(swift build -c release $ARCH_FLAGS --show-bin-path)/$PRODUCT"
+
+APP="build/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Messenger"
+cp "$BIN" "$APP/Contents/MacOS/$PRODUCT"
 
 # The Messenger icon (assets/icon, from WLM 8.1's ctticon.ico).
 ICON=../assets/icon
@@ -44,10 +51,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key><string>Messenger</string>
-	<key>CFBundleDisplayName</key><string>Messenger</string>
-	<key>CFBundleIdentifier</key><string>local.messengermac</string>
-	<key>CFBundleExecutable</key><string>Messenger</string>
+	<key>CFBundleName</key><string>$NAME</string>
+	<key>CFBundleDisplayName</key><string>$NAME</string>
+	<key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+	<key>CFBundleExecutable</key><string>$PRODUCT</string>
 	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>${VERSION%%~*}</string>
@@ -65,4 +72,4 @@ if [ "${SIGN_IDENTITY:--}" = "-" ]; then
 else
 	codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
 fi
-echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/Messenger"))"
+echo "Built $APP ($(lipo -archs "$APP/Contents/MacOS/$PRODUCT"))"

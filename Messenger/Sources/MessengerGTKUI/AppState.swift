@@ -1,6 +1,5 @@
 import CGtk
 import Foundation
-import MatrixKit
 import MSNKit
 
 struct Settings: Codable {
@@ -41,7 +40,7 @@ struct Settings: Codable {
 	static var file: URL {
 		let config = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"].map { URL(fileURLWithPath: $0) }
 			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config")
-		return config.appendingPathComponent("messenger-wlm/settings.json")
+		return config.appendingPathComponent("\(AppState.storageName)/settings.json")
 	}
 
 	static func load() -> Settings {
@@ -75,7 +74,17 @@ struct ChatLine {
 final class AppState {
 	enum Phase: Equatable { case signedOut, signingIn(String), signedIn }
 
+	/// The service this app is built for, and where it keeps its settings,
+	/// pictures and passwords (set by MessengerGTKLauncher before anything else).
+	static var profile: IMServiceProfile = EscargotProfile()
+	nonisolated(unsafe) static var storageName = "messenger-wlm"
 	static let shared = AppState()
+	let profile: IMServiceProfile = AppState.profile
+
+	/// The GApplication ID; the Escargot app keeps the one install.sh registers.
+	static var applicationID: String {
+		profile.identifier == "escargot" ? "chat.messenger.wlm81" : "chat.messenger.wlm81.\(profile.identifier)"
+	}
 
 	var app: Ptr!
 	var settings = Settings.load() { didSet { settings.save() } }
@@ -103,9 +112,14 @@ final class AppState {
 
 	func signIn(email rawEmail: String, password: String, status: Presence, rememberMe: Bool, rememberPassword: Bool) {
 		let email = rawEmail.trimmingCharacters(in: .whitespaces).lowercased()
-		// Matrix homeservers may sign in through the browser instead, with no password here.
-		guard !email.isEmpty, !password.isEmpty || MatrixID.isUserID(email) else {
-			signInError = "Please type your e-mail address and password."
+		// Some services sign in without a password here (the browser).
+		guard !email.isEmpty, !password.isEmpty || profile.allowsEmptyPassword(for: email) else {
+			signInError = "Please type your \(profile.accountLabel.lowercased().trimmingCharacters(in: [":"])) and password."
+			notify(onPhase)
+			return
+		}
+		if let problem = profile.problem(withAccount: email) {
+			signInError = problem
 			notify(onPhase)
 			return
 		}
@@ -119,15 +133,9 @@ final class AppState {
 		settings = s
 		if !rememberPassword { SecretStore.delete(email) } else if !password.isEmpty { SecretStore.set(password, for: email) }
 
-		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
-		let client: any IMService
-		if MatrixID.isUserID(email) {
-			let matrix = MatrixClient(homeserver: settings.matrixHomeserverURL)
-			matrix.openURL = { url in gtk_uri_launcher_launch(gtk_uri_launcher_new(url.absoluteString), nil, nil, nil, nil) }
-			client = matrix
-		} else {
-			client = MessengerClient(config: settings.serverConfig)
-		}
+		let client = profile.makeClient(IMConnectionSettings(
+			msnServer: settings.serverConfig, homeserver: settings.matrixHomeserverURL, rememberMe: rememberMe,
+			openURL: { url in gtk_uri_launcher_launch(gtk_uri_launcher_new(url.absoluteString), nil, nil, nil, nil) }))
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
 			client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered
 		}
@@ -141,7 +149,7 @@ final class AppState {
 			do {
 				// MSN advertises the picture kept on this computer; a Matrix
 				// account's picture lives on the server.
-				if client is MessengerClient { await client.setDisplayPicture(try? Data(contentsOf: myPictureURL)) }
+				if profile.announcesLocalDisplayPicture { await client.setDisplayPicture(try? Data(contentsOf: myPictureURL)) }
 				try await client.signIn(email: email, password: password, status: status)
 			} catch {
 				guard self.client === client else { return }  // cancelled
@@ -209,7 +217,7 @@ final class AppState {
 	static var dataDirectory: URL {
 		(ProcessInfo.processInfo.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0) }
 			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share"))
-			.appendingPathComponent("messenger-wlm", isDirectory: true)
+			.appendingPathComponent(storageName, isDirectory: true)
 	}
 
 	/// Our display picture, one per account as in WLM.
@@ -519,15 +527,15 @@ enum SecretStore {
 	}
 
 	static func get(_ account: String) -> String? {
-		tool(["lookup", "application", "messenger-wlm", "account", account]).flatMap { $0.isEmpty ? nil : $0 }
+		tool(["lookup", "application", AppState.storageName, "account", account]).flatMap { $0.isEmpty ? nil : $0 }
 	}
 
 	static func set(_ password: String, for account: String) {
-		_ = tool(["store", "--label=Messenger (\(account))", "application", "messenger-wlm", "account", account], input: password)
+		_ = tool(["store", "--label=Messenger (\(account))", "application", AppState.storageName, "account", account], input: password)
 	}
 
 	static func delete(_ account: String) {
-		_ = tool(["clear", "application", "messenger-wlm", "account", account])
+		_ = tool(["clear", "application", AppState.storageName, "account", account])
 	}
 }
 
