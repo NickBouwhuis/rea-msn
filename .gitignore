@@ -1,0 +1,5 @@
+.build/
+build/
+.swiftpm/
+re/scripts/rea-env.sh
+.DS_Store

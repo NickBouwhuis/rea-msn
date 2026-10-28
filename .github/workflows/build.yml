@@ -1,0 +1,145 @@
+# Builds the macOS DMG and the Ubuntu .debs on every push; a v* tag also
+# publishes them as a GitHub release. No Microsoft assets are involved: users
+# import those from their own installer after installing.
+#
+# Optional macOS signing/notarization secrets (unsigned, ad-hoc builds without):
+#   MACOS_CERTIFICATE           base64 of the Developer ID Application .p12
+#   MACOS_CERTIFICATE_PASSWORD  its password
+#   MACOS_SIGN_IDENTITY         e.g. "Developer ID Application: Name (TEAMID)"
+#   NOTARY_KEY                  base64 of the App Store Connect API key (.p8)
+#   NOTARY_KEY_ID, NOTARY_ISSUER
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SWIFT_VERSION: "6.4.1"
+
+jobs:
+  macos:
+    name: macOS DMG
+    runs-on: macos-latest
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      NOTARY_KEY_B64: ${{ secrets.NOTARY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(git rev-parse --short HEAD)"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          swift --version
+      - name: Test
+        working-directory: Messenger
+        run: swift test
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kc_pw="$(openssl rand -hex 16)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kc_pw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kc_pw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$kc"
+          security set-key-partition-list -S apple-tool:,apple: -k "$kc_pw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "SIGN_IDENTITY=$MACOS_SIGN_IDENTITY" >> "$GITHUB_ENV"
+      - name: Notarization key
+        if: env.NOTARY_KEY_B64 != ''
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+        run: |
+          echo "$NOTARY_KEY_B64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          echo "NOTARY_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+          echo "NOTARY_KEY_ID=$NOTARY_KEY_ID" >> "$GITHUB_ENV"
+          echo "NOTARY_ISSUER=$NOTARY_ISSUER" >> "$GITHUB_ENV"
+      - name: Build DMG (universal)
+        run: ARCHS="arm64 x86_64" Messenger/scripts/package-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: Messenger/build/*.dmg
+          if-no-files-found: error
+
+  ubuntu:
+    name: Ubuntu .deb (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # Built on the oldest supported Ubuntu, so the package's Depends hold for newer ones.
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev binutils \
+            libcurl4-openssl-dev libxml2-dev libsqlite3-dev libncurses-dev libedit-dev \
+            libpython3-dev libz3-dev libstdc++-13-dev libgcc-13-dev zlib1g-dev pkg-config gnupg2 unzip
+      - name: Install Swift ${{ env.SWIFT_VERSION }}
+        run: |
+          curl -fsSL -O "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz"
+          tar zxf "swiftly-$(uname -m).tar.gz"
+          ./swiftly init --quiet-shell-followup --assume-yes --skip-install
+          . "$HOME/.local/share/swiftly/env.sh"
+          swiftly install --use --assume-yes "$SWIFT_VERSION"
+          swift --version
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(git rev-parse --short HEAD)"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Test
+        working-directory: Messenger
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          swift test
+      - name: Build .deb
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          linux/scripts/package-deb.sh
+      - name: Install check
+        run: |
+          sudo apt-get install -y ./build/*.deb
+          ! ldd /usr/bin/wlm-messenger | grep "not found"
+          dpkg -L wlm-messenger
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-deb-${{ matrix.arch }}
+          path: build/*.deb
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, ubuntu]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

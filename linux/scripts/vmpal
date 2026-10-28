@@ -1,0 +1,3 @@
+#!/bin/sh
+# VMPal's CLI without installing it system-wide (see `vmpal help setup`).
+exec /Applications/VMPal.app/Contents/Helpers/VMPalMachine.app/Contents/MacOS/VMPalMachine --cli "$@"

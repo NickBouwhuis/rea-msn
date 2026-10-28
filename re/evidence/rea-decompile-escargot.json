@@ -1,0 +1,21 @@
+{
+ "target": "escargot.dll",
+ "sha256": "a7d7a5104fa82a831a4b9efc9c84c5220772ce64a5614bc48e91a9c5cecd5cfe",
+ "provider": {
+  "id": "ghidra",
+  "name": "Ghidra",
+  "version": "12.1.4"
+ },
+ "counts": {
+  "selected": 5815,
+  "excluded": 0,
+  "requested": 5815,
+  "written": 5708,
+  "failed": 0,
+  "external": 107,
+  "skipped": 0,
+  "remaining": 0
+ },
+ "failures": [],
+ "analysis_profile_digest": "e763201e522a4b123fb330eede09834c44ddf2bb90702e50eea219801be95539"
+}

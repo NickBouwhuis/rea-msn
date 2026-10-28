@@ -1,0 +1,21 @@
+{
+ "target": "RUN_AFTER_INSTALL.exe",
+ "sha256": "e31a5a49e129292f6cac28c5f467724e9f91eadf8e8ea0d61966fc2f6284061f",
+ "provider": {
+  "id": "ghidra",
+  "name": "Ghidra",
+  "version": "12.1.4"
+ },
+ "counts": {
+  "selected": 90,
+  "excluded": 0,
+  "requested": 90,
+  "written": 33,
+  "failed": 0,
+  "external": 57,
+  "skipped": 0,
+  "remaining": 0
+ },
+ "failures": [],
+ "analysis_profile_digest": "e1ad533d4cc0333c2136fe0894217de2d61feea098240326e78633f9e4ddcbf9"
+}

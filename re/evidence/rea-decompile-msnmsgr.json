@@ -1,0 +1,21 @@
+{
+ "target": "msnmsgr.exe",
+ "sha256": "0908b3eb6afcdc2d316eaa7d640b3db975cd59f573a7fdc18d64d553d731eac4",
+ "provider": {
+  "id": "ghidra",
+  "name": "Ghidra",
+  "version": "12.1.4"
+ },
+ "counts": {
+  "selected": 46654,
+  "excluded": 0,
+  "requested": 46654,
+  "written": 45099,
+  "failed": 0,
+  "external": 1555,
+  "skipped": 0,
+  "remaining": 0
+ },
+ "failures": [],
+ "analysis_profile_digest": "e1ad533d4cc0333c2136fe0894217de2d61feea098240326e78633f9e4ddcbf9"
+}

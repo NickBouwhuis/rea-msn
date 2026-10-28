@@ -1,0 +1,15 @@
+services:
+  escargot:
+    build: .
+    image: rea-msn/escargot-dev
+    ports:
+      - "127.0.0.1:1863:1863"
+      - "127.0.0.1:1864:1864"
+      - "127.0.0.1:8081:8081"
+    environment:
+      TARGET_HOST: 127.0.0.1
+    volumes:
+      - escargot-data:/data
+
+volumes:
+  escargot-data:

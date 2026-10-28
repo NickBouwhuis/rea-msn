@@ -1,0 +1,12 @@
+# Also expose the dev server to VMPal VMs on the "local VMs" network
+# (this Mac is 192.168.128.1 there), and advertise that address in
+# switchboard redirects so clients on the Mac and in VMs can both follow them.
+#   docker compose -f docker-compose.yml -f docker-compose.vm.yml up -d
+services:
+  escargot:
+    ports:
+      - "192.168.128.1:1863:1863"
+      - "192.168.128.1:1864:1864"
+      - "192.168.128.1:8081:8081"
+    environment:
+      TARGET_HOST: 192.168.128.1

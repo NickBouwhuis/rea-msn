@@ -1,0 +1,8 @@
+# Source this before running rea against Windows PE targets with Ghidra.
+# Ghidra 12.1.x (rea's verified version) + a native arm64 decompiler built per
+# rea's docs/installation.md "macOS arm64 native decompiler".
+export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.4_PUBLIC
+export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home
+export REA_ANALYSIS_PROVIDER=ghidra
+export REA_GHIDRA_STARTUP_TIMEOUT_MS=1800000     # msnmsgr.exe auto-analysis takes several minutes
+export REA_GHIDRA_DECOMPILE_TIMEOUT_SECONDS=60
