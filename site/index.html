@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rea-msn: Windows Live Messenger 8.1 for macOS and Ubuntu</title>
+<meta name="description" content="A native reimplementation of Windows Live Messenger 8.1 for macOS and Ubuntu. Signs in to Escargot and uses the look, emoticons and sounds from your own installer.">
+<style>
+:root {
+	--header-blue: #063878;
+	--teal: #347FA2;
+	--mist: #ECF3F6;
+	--ink: #333333;
+	--muted: #777777;
+	--link: #0076C6;
+	--online: #4CA22F;
+	--offline: #9AA3A8;
+	--line: #C9DCE6;
+	--white: #FFFFFF;
+	--face: Tahoma, Verdana, "DejaVu Sans", "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+	margin: 0;
+	background: var(--mist);
+	color: var(--ink);
+	font: 16px/1.6 var(--face);
+}
+a { color: var(--link); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid #F2B21B; outline-offset: 2px; border-radius: 2px; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+.prose { max-width: 66ch; }
+code, pre { font-family: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 14px; }
+
+/* Header band: WLM's header gradient with hand-drawn "vapor" swooshes. */
+.band {
+	position: relative;
+	overflow: hidden;
+	color: var(--white);
+	background: linear-gradient(180deg, var(--header-blue) 0%, #0D4F8E 34%, var(--teal) 70%, #7FB3C8 90%, var(--mist) 100%);
+	padding-bottom: 72px;
+}
+.band svg.vapor { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.topbar { display: flex; justify-content: space-between; align-items: center; padding-top: 20px; position: relative; }
+.mark { font-weight: bold; font-size: 18px; color: var(--white); text-decoration: none; display: flex; align-items: center; gap: 10px; }
+.mark .dot { width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #B7F08F, var(--online) 60%, #2E6E19); box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.topbar nav a { color: var(--white); margin-left: 22px; font-size: 15px; text-decoration: none; opacity: .9; }
+.topbar nav a:hover { opacity: 1; text-decoration: underline; }
+
+.hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 470px; gap: 56px; align-items: center; padding-top: 64px; }
+.hero h1 { font-size: 52px; line-height: 1.08; letter-spacing: -0.025em; margin: 0 0 20px; font-weight: bold; text-shadow: 0 1px 0 rgba(0,0,0,.18); }
+.hero .lede { font-size: 18px; line-height: 1.55; margin: 0 0 32px; max-width: 34em; color: #F2F8FB; }
+.lede a { color: var(--white); }
+
+.downloads { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.button {
+	display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px;
+	font: bold 16px/1 var(--face); color: #0B2F5C; text-decoration: none;
+	padding: 13px 20px; border-radius: 4px; cursor: pointer;
+	background: linear-gradient(#FFFFFF, #E4EEF4 48%, #D3E3EC 52%, #E9F2F7);
+	border: 1px solid #6E95AF;
+	box-shadow: inset 0 1px 0 #FFFFFF, 0 1px 2px rgba(0,30,60,.25);
+}
+.button:hover { background: linear-gradient(#FFFFFF, #EAF6FC 48%, #CDE8F6 52%, #E8F6FD); border-color: #3C7FB1; }
+.button:active { background: linear-gradient(#D2E4EE, #E4EEF4); }
+.button small { font-weight: normal; color: #44617A; font-size: 13px; line-height: 1.2; }
+details.debs { position: relative; }
+details.debs summary { list-style: none; }
+details.debs summary::-webkit-details-marker { display: none; }
+details.debs .menu {
+	position: absolute; z-index: 5; top: calc(100% + 6px); left: 0; min-width: 300px;
+	background: var(--white); color: var(--ink); border: 1px solid #8DA9BC; border-radius: 3px;
+	box-shadow: 0 6px 18px rgba(0,30,60,.25); padding: 4px; font-size: 14px;
+}
+.menu a { display: block; padding: 7px 10px; color: var(--ink); text-decoration: none; border: 1px solid transparent; border-radius: 2px; }
+.menu a:hover, .menu a:focus-visible { background: #E5F3FB; border-color: #A9D3EE; }
+.menu a span { color: var(--muted); }
+.release-note { margin: 14px 0 0; font-size: 14px; color: #DCEBF3; }
+.release-note a { color: var(--white); }
+
+/* The conversation window. */
+.convo {
+	background: var(--white);
+	border-radius: 7px 7px 4px 4px;
+	box-shadow: 0 0 0 1px rgba(10,40,70,.45), 0 18px 40px rgba(0,25,55,.35);
+	overflow: hidden;
+	color: var(--ink);
+	font-size: 13px;
+}
+.convo .title {
+	display: flex; align-items: center; justify-content: space-between;
+	padding: 8px 10px 26px;
+	background: linear-gradient(180deg, #0A3F80, #2D79A5 55%, #B9D8E5 88%, #E6F1F5);
+	color: var(--white);
+}
+.convo .title b { font-size: 13px; }
+.convo .title span { opacity: .85; font-size: 12px; }
+.convo .frame { display: flex; gap: 5px; }
+.convo .frame i { width: 12px; height: 10px; border: 1.5px solid rgba(255,255,255,.75); border-radius: 2px; display: block; }
+.convo .frame i:first-child { border-width: 0 0 1.5px; height: 8px; }
+.convo .body { display: grid; grid-template-columns: minmax(0, 1fr) 88px; gap: 10px; padding: 0 10px 10px; margin-top: -16px; }
+.history {
+	height: 236px; overflow: hidden; background: var(--white);
+	border: 1px solid #BED6E0; padding: 8px 10px; line-height: 1.5;
+}
+.history .says { color: var(--muted); margin-top: 6px; }
+.history .says:first-child { margin-top: 0; }
+.history .msg { padding-left: 14px; }
+.history .nudge { font-weight: bold; margin-top: 6px; }
+.history .notice { color: var(--muted); }
+.tile {
+	width: 88px; height: 88px; border: 1px solid #D8D9D9; padding: 3px; background: var(--white);
+}
+.tile div { width: 100%; height: 100%; border-radius: 2px; background: radial-gradient(circle at 50% 36%, #CFE8FB 0 17%, transparent 18%), radial-gradient(ellipse at 50% 105%, #CFE8FB 0 42%, transparent 43%), linear-gradient(160deg, #5BA6E8, #1E64C0); }
+.pictures { display: flex; flex-direction: column; justify-content: space-between; }
+.status { color: var(--muted); font-size: 12px; padding: 4px 0 6px; min-height: 26px; }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.composer .box { border: 1px solid #BED6E0; height: 52px; padding: 6px 8px; color: var(--muted); }
+.composer button {
+	font: bold 12px/1 var(--face); color: #0B2F5C; padding: 0 12px; border-radius: 3px; cursor: pointer;
+	background: linear-gradient(#FFFFFF, #E4EEF4 48%, #D3E3EC 52%, #E9F2F7); border: 1px solid #8DA9BC;
+}
+.composer button:hover { border-color: #3C7FB1; }
+@keyframes shake {
+	0%, 100% { transform: translate(0, 0); }
+	10% { transform: translate(-9px, 3px); } 20% { transform: translate(8px, -4px); }
+	30% { transform: translate(-7px, -2px); } 40% { transform: translate(7px, 3px); }
+	50% { transform: translate(-5px, 2px); } 60% { transform: translate(5px, -3px); }
+	70% { transform: translate(-3px, 1px); } 80% { transform: translate(2px, -1px); }
+}
+.convo.shaking { animation: shake .55s linear; }
+
+/* Sections */
+main section { padding: 64px 0 8px; }
+h2 { font-size: 30px; line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 14px; color: var(--header-blue); }
+h3 { font-size: 18px; margin: 0 0 6px; color: var(--header-blue); }
+p { margin: 0 0 16px; }
+
+ol.steps { list-style: none; margin: 28px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; counter-reset: step; }
+ol.steps li { counter-increment: step; position: relative; padding-top: 52px; }
+ol.steps li::before {
+	content: counter(step); position: absolute; top: 0; left: 0;
+	width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+	font: bold 18px/1 var(--face); color: var(--white);
+	background: radial-gradient(circle at 35% 30%, #5FA3D6, var(--header-blue));
+	box-shadow: 0 0 0 3px #D6E7F0;
+}
+ol.steps p { font-size: 15px; }
+pre {
+	margin: 10px 0 14px; padding: 12px 14px; overflow-x: auto;
+	background: var(--white); border: 1px solid var(--line); border-radius: 3px; line-height: 1.5;
+}
+.os-label { font-size: 13px; color: var(--muted); margin: 12px 0 -4px; }
+.commands { margin-top: 30px; }
+
+/* What works, as a contact list. */
+.list {
+	margin-top: 26px; background: var(--white); border: 1px solid var(--line); border-radius: 4px;
+	padding: 10px 6px 14px; max-width: 760px;
+}
+.group { font-weight: bold; padding: 8px 10px 4px; display: flex; align-items: center; gap: 8px; }
+.group::before { content: ""; border: 5px solid transparent; border-top: 6px solid #6B7C86; margin-top: 5px; }
+.buddy { display: flex; gap: 12px; align-items: baseline; padding: 5px 10px 5px 30px; border-radius: 3px; }
+.buddy:hover { background: #E5F3FB; }
+.buddy::before {
+	content: ""; flex: none; width: 11px; height: 11px; border-radius: 50%; position: relative; top: 1px;
+	background: radial-gradient(circle at 35% 30%, #C4F2A2, var(--online) 60%, #2E6E19);
+}
+.buddy.off::before { background: radial-gradient(circle at 35% 30%, #F1F3F4, var(--offline) 60%, #6F787D); }
+.buddy b { font-weight: normal; }
+.buddy span { color: var(--muted); font-size: 14px; }
+.buddy span::before { content: "– "; }
+
+dl.findings { margin: 24px 0 0; display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px 28px; max-width: 860px; }
+dl.findings dt { font-weight: bold; color: var(--header-blue); }
+dl.findings dd { margin: 0; }
+
+.columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; margin-top: 18px; }
+
+footer { margin-top: 80px; padding: 28px 0 40px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+footer p { max-width: 80ch; }
+
+@media (max-width: 960px) {
+	.hero { grid-template-columns: 1fr; gap: 40px; padding-top: 40px; }
+	.hero h1 { font-size: 40px; }
+	.convo { max-width: 470px; }
+	ol.steps, .columns { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+	.wrap { padding: 0 16px; }
+	.hero h1 { font-size: 32px; }
+	.hero .lede { font-size: 16px; }
+	.topbar nav a { margin-left: 14px; }
+	.convo .body { grid-template-columns: 1fr; }
+	.pictures { display: none; }
+	dl.findings { grid-template-columns: 1fr; gap: 4px; }
+	dl.findings dd { margin-bottom: 12px; }
+	details.debs .menu { min-width: 0; width: calc(100vw - 32px); }
+	.buddy { flex-wrap: wrap; gap: 0 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.convo.shaking { animation: none; }
+}
+</style>
+</head>
+<body>
+<header class="band">
+	<svg class="vapor" viewBox="0 0 1440 640" preserveAspectRatio="none" aria-hidden="true">
+		<path d="M-40 420 C 260 300, 560 520, 900 360 S 1380 250, 1500 330" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="2"/>
+		<path d="M-40 460 C 300 330, 620 560, 960 400 S 1400 300, 1500 370" fill="none" stroke="rgba(255,255,255,.10)" stroke-width="1.5"/>
+		<path d="M-40 500 C 340 380, 640 600, 1000 440 S 1420 350, 1500 410" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+		<path d="M820 -20 C 980 120, 1180 90, 1500 230 L 1500 -20 Z" fill="rgba(255,255,255,.06)"/>
+		<path d="M1000 -20 C 1120 70, 1300 60, 1500 130 L 1500 -20 Z" fill="rgba(255,255,255,.06)"/>
+	</svg>
+	<div class="wrap">
+		<div class="topbar">
+			<a class="mark" href="./"><span class="dot" aria-hidden="true"></span>rea-msn</a>
+			<nav aria-label="Project">
+				<a href="https://github.com/NickBouwhuis/rea-msn">GitHub</a>
+				<a href="https://github.com/NickBouwhuis/rea-msn/releases">Releases</a>
+			</nav>
+		</div>
+		<div class="hero">
+			<div>
+				<h1>Windows Live Messenger 8.1, rebuilt for macOS and Ubuntu</h1>
+				<p class="lede">A native reimplementation of the 2007 Messenger client. It signs in to <a href="https://escargot.chat">Escargot</a>, the community-run MSN service, and takes Messenger's look, emoticons and sounds from an installer you already have.</p>
+				<div class="downloads">
+					<a class="button" id="dl-mac" href="https://github.com/NickBouwhuis/rea-msn/releases/latest">Download for macOS <small>14 or later</small></a>
+					<details class="debs">
+						<summary class="button" id="dl-linux">Download for Ubuntu <small>24.04 or 26.04</small></summary>
+						<div class="menu" id="deb-menu">
+							<a href="https://github.com/NickBouwhuis/rea-msn/releases/latest">All downloads on the releases page</a>
+						</div>
+					</details>
+				</div>
+				<p class="release-note" id="release-note">Free and open source. Nothing from Microsoft is included.</p>
+			</div>
+			<figure class="convo" id="convo" aria-label="Example conversation between Bob on Ubuntu and Alice on macOS" style="margin:0">
+				<div class="title" aria-hidden="true">
+					<div><b>Alice</b> <span>&lt;alice@example.com&gt; on macOS</span></div>
+					<div class="frame"><i></i><i></i><i></i></div>
+				</div>
+				<div class="body">
+					<div>
+						<div class="history" id="history" aria-live="polite"></div>
+						<div class="status" id="status" aria-hidden="true"></div>
+						<div class="composer">
+							<div class="box" aria-hidden="true">Bob is on Ubuntu</div>
+							<button type="button" id="nudge">Send a nudge</button>
+						</div>
+					</div>
+					<div class="pictures" aria-hidden="true">
+						<div class="tile"><div></div></div>
+						<div class="tile"><div></div></div>
+					</div>
+				</div>
+			</figure>
+		</div>
+	</div>
+</header>
+
+<main class="wrap">
+	<section id="start" aria-labelledby="start-h">
+		<h2 id="start-h">Get started</h2>
+		<p class="prose">rea-msn ships no Microsoft code, artwork or sounds. You import them from Escargot's copy of the original installer, so the app looks the way you remember.</p>
+		<ol class="steps">
+			<li>
+				<h3>Install the app</h3>
+				<p>Open the DMG and drag Messenger to Applications, or install the <code>.deb</code> for your Ubuntu release. The first time you open it on a Mac, allow it under System Settings › Privacy &amp; Security.</p>
+			</li>
+			<li>
+				<h3>Get the installer</h3>
+				<p>Download the Windows Live Messenger 8.1 installer (<code>escargot-wlm-8.1.0178-en.msi</code>) from <a href="https://escargot.chat">Escargot</a>, and create an Escargot account if you don't have one.</p>
+			</li>
+			<li>
+				<h3>Import and sign in</h3>
+				<p>Run the importer on the installer, then sign in as <code>yourname@escargot.chat</code>: your Escargot username, not the e-mail address you registered with.</p>
+			</li>
+		</ol>
+		<div class="commands">
+			<p class="os-label">On macOS, after <code>brew install sevenzip ffmpeg</code></p>
+<pre><code>/Applications/Messenger.app/Contents/Resources/import/Messenger/scripts/import-wlm-assets.sh \
+    ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre>
+			<p class="os-label">On Ubuntu</p>
+<pre><code>sudo apt install ./wlm-messenger_*.deb
+wlm-messenger-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre>
+		</div>
+	</section>
+
+	<section id="features" aria-labelledby="features-h">
+		<h2 id="features-h">What works</h2>
+		<p class="prose">Everything you need for a day of chatting. The rest needs Messenger's peer-to-peer protocol, which isn't built yet.</p>
+		<div class="list" role="list">
+			<div class="group">Works (8)</div>
+			<div class="buddy" role="listitem"><b>Sign in with your Escargot account</b><span>the same handshake WLM 8.1 uses</span></div>
+			<div class="buddy" role="listitem"><b>Contacts and groups</b><span>add, remove, block, and approve people who add you</span></div>
+			<div class="buddy" role="listitem"><b>Status and personal message</b><span>Busy, Away, Appear Offline and the rest, kept between sign-ins</span></div>
+			<div class="buddy" role="listitem"><b>Conversations</b><span>fonts and colours, "is typing a message", failed-delivery notices</span></div>
+			<div class="buddy" role="listitem"><b>Emoticons</b><span>the original set, animated ones included</span></div>
+			<div class="buddy" role="listitem"><b>Nudges</b><span>yes, the window shakes</span></div>
+			<div class="buddy" role="listitem"><b>Sign-in and message alerts</b><span>with Messenger's own sounds</span></div>
+			<div class="buddy" role="listitem"><b>Remember my password</b><span>in the macOS Keychain or the Linux secret store</span></div>
+			<div class="group">Not yet (4)</div>
+			<div class="buddy off" role="listitem"><b>Display pictures, winks and file transfer</b><span>peer-to-peer</span></div>
+			<div class="buddy off" role="listitem"><b>Voice and video</b><span>peer-to-peer</span></div>
+			<div class="buddy off" role="listitem"><b>Offline messages</b><span>a separate Escargot service</span></div>
+			<div class="buddy off" role="listitem"><b>Starting group chats</b><span>joining one works</span></div>
+		</div>
+	</section>
+
+	<section id="how" aria-labelledby="how-h">
+		<h2 id="how-h">How it was rebuilt</h2>
+		<p class="prose">The client's behaviour and look come from the original binaries, decompiled with <a href="https://github.com/morluto/rea">rea</a> and Ghidra, and checked against the open-source Escargot server.</p>
+		<dl class="findings">
+			<dt>Signing in</dt>
+			<dd>MSNP15 with Passport tokens and the MBI key exchange, an HMAC-SHA1 and triple-DES blob built exactly as msidcrl40.dll builds it.</dd>
+			<dt>The challenge</dt>
+			<dd>The client's product key is hidden in msnmsgr.exe behind an XOR mask; the challenge routine was ported from the decompiled code.</dd>
+			<dt>The look</dt>
+			<dd>Messenger draws its windows from data in msgsres.dll: layouts, stylesheets and images in a custom run-length format. A ported decoder turns them into the skin both apps use.</dd>
+			<dt>Emoticons</dt>
+			<dd>A 32-bit image strip plus a table of animation strips, frame counts and play-once flags, stepped every 250 ms like the original.</dd>
+		</dl>
+		<p style="margin-top:22px"><a href="https://github.com/NickBouwhuis/rea-msn/blob/main/docs/RE-FINDINGS.md">Read the full reverse-engineering notes</a>, with addresses and evidence.</p>
+	</section>
+
+	<section id="source" aria-labelledby="source-h">
+		<h2 id="source-h">Build it yourself</h2>
+		<p class="prose">Swift on both platforms: a shared protocol library, a SwiftUI app for macOS and a GTK 4 app for Linux. A Docker image of the Escargot server lets you test against your own machine.</p>
+<pre><code>git clone https://github.com/NickBouwhuis/rea-msn.git
+cd rea-msn</code></pre>
+		<div class="columns">
+			<div>
+				<p class="os-label">macOS (Xcode or Swift 5.10+)</p>
+<pre><code>cd Messenger
+./scripts/build-app.sh
+open build/Messenger.app</code></pre>
+			</div>
+			<div>
+				<p class="os-label">Ubuntu (Swift, libgtk-4-dev)</p>
+<pre><code>linux/scripts/install.sh
+wlm-messenger</code></pre>
+			</div>
+		</div>
+		<p>See the <a href="https://github.com/NickBouwhuis/rea-msn#readme">README</a> for tests, the local server and how releases are built.</p>
+	</section>
+</main>
+
+<footer>
+	<div class="wrap">
+		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community.</p>
+	</div>
+</footer>
+
+<script>
+(() => {
+	const repo = "NickBouwhuis/rea-msn";
+	const history = document.getElementById("history");
+	const status = document.getElementById("status");
+	const convo = document.getElementById("convo");
+	const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+	// The conversation: from the first chat between the two apps.
+	const script = [
+		{ who: "Bob", text: "Hey Alice! Greetings from Ubuntu 😁 👍" },
+		{ who: "Alice", text: "Hi Bob! Replying from macOS 🙂 ❤️ Coffee? ☕" },
+		{ who: "Bob", text: "Sure! ☕ Let's party 🥳 even if there's a storm coming ⛈️" },
+		{ who: "Alice", text: "Haha, see you on Escargot ⭐" },
+	];
+	function line(cls, text) {
+		const div = document.createElement("div");
+		div.className = cls;
+		div.textContent = text;
+		history.appendChild(div);
+		history.scrollTop = history.scrollHeight;
+	}
+	function say(m) { line("says", `${m.who} says:`); line("msg", m.text); }
+	if (reduce) {
+		script.forEach(say);
+	} else {
+		let t = 600;
+		script.forEach(m => {
+			setTimeout(() => { status.textContent = `${m.who} is typing a message.`; }, t);
+			t += 1300;
+			setTimeout(() => { status.textContent = ""; say(m); }, t);
+			t += 900;
+		});
+	}
+	document.getElementById("nudge").addEventListener("click", () => {
+		line("nudge", "You have just sent a nudge.");
+		convo.classList.remove("shaking");
+		void convo.offsetWidth;
+		convo.classList.add("shaking");
+	});
+
+	// Point the download buttons at the latest release's files.
+	fetch(`https://api.github.com/repos/${repo}/releases/latest`)
+		.then(r => r.ok ? r.json() : Promise.reject(r.status))
+		.then(rel => {
+			const assets = rel.assets || [];
+			const dmg = assets.find(a => a.name.endsWith(".dmg"));
+			if (dmg) document.getElementById("dl-mac").href = dmg.browser_download_url;
+			const debs = assets.filter(a => a.name.endsWith(".deb"));
+			if (debs.length) {
+				const menu = document.getElementById("deb-menu");
+				menu.textContent = "";
+				const label = { amd64: "Intel or AMD (amd64)", arm64: "ARM (arm64)" };
+				debs.sort((a, b) => a.name.localeCompare(b.name)).forEach(a => {
+					const m = a.name.match(/[~.]ubuntu(\d+\.\d+)_(\w+)\.deb$/);  // GitHub turns "~" into "." in asset names
+					const link = document.createElement("a");
+					link.href = a.browser_download_url;
+					link.textContent = m ? `Ubuntu ${m[1]}, ` : a.name;
+					if (m) { const s = document.createElement("span"); s.textContent = label[m[2]] || m[2]; link.appendChild(s); }
+					menu.appendChild(link);
+				});
+			}
+			document.getElementById("release-note").textContent =
+				`Version ${rel.tag_name.replace(/^v/, "")}. Free and open source. Nothing from Microsoft is included.`;
+		})
+		.catch(() => {});
+})();
+</script>
+</body>
+</html>

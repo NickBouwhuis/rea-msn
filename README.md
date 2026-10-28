@@ -6,6 +6,8 @@ This project reverse-engineers the Escargot build of Windows Live Messenger 8.1.
 ABCH protocols to the same Escargot servers. Both apps draw WLM 8.1's own UI resources, decoded from
 your installer.
 
+Project page: https://nickbouwhuis.github.io/rea-msn/
+
 The reverse-engineering write-up, with addresses and evidence, is in
 [docs/RE-FINDINGS.md](docs/RE-FINDINGS.md).
 
@@ -26,7 +28,7 @@ devserver/             Docker image of the open-source Escargot server, for loca
 ## Install a release
 
 Download the DMG (macOS 14+, Apple Silicon and Intel) or the `.deb` for your Ubuntu release and
-architecture (`~ubuntu24.04` or `~ubuntu26.04`, amd64 or arm64) from the repository's Releases page. Neither contains anything from
+architecture (`ubuntu24.04` or `ubuntu26.04`, amd64 or arm64) from the repository's Releases page. Neither contains anything from
 Microsoft. After installing, import the look, emoticons and sounds from your own copy of the Escargot
 WLM 8.1 installer (`escargot-wlm-8.1.0178-en.msi`):
 
@@ -35,7 +37,7 @@ WLM 8.1 installer (`escargot-wlm-8.1.0178-en.msi`):
 /Applications/Messenger.app/Contents/Resources/import/Messenger/scripts/import-wlm-assets.sh ~/Downloads/escargot-wlm-8.1.0178-en.msi
 
 # Ubuntu (the .deb recommends 7zip, python3 and ffmpeg)
-sudo apt install ./wlm-messenger_*~ubuntu24.04_amd64.deb
+sudo apt install ./wlm-messenger_*ubuntu24.04_amd64.deb
 wlm-messenger-import ~/Downloads/escargot-wlm-8.1.0178-en.msi
 ```
 
