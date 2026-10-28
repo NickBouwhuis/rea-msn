@@ -223,7 +223,42 @@ was lost (found while testing the GTK app).
 server, and `msnctl --escargot check` completes the live RST (HTTPS via FoundationNetworking/libcurl) →
 MBI → `USR SSO S` → ABCH sign-in from Linux.
 
-Not ported (requires the MSNSLP/P2P stack or extra services): display pictures, custom emoticons,
-winks, file transfer, ink, webcam/voice, offline messages (OIM via `rsi.asmx`/`oim.asmx`), Hotmail
-inbox counts, MSN Spaces/Today, group editing, and multi-party invites from the UI (incoming multi-party
-switchboards are handled).
+## 7. Group conversations, offline messages and P2P
+
+**Group conversations** are switchboards with more than one other participant: `CAL` invites into an
+open switchboard, and invitees answer the `RNG` as for a one-to-one chat (`IRO` lists who is already
+there). A client must not replace a group switchboard when the same person opens a second one with it
+(WLM may open side switchboards for P2P), or it leaves the group; MSNKit keeps both.
+
+**Offline messages** (CHotmailService in msnmsgr.exe; SOAP templates at .data 0x35b440–0x35f0f8):
+- The NS sends `MSG Hotmail Hotmail` with `text/x-msmsgsinitialmdatanotification` after the first `CHG`,
+  and `text/x-msmsgsoimnotification` when one arrives; the body's `Mail-Data` is `<MD>…<M><E>from</E>
+  <I>id</I><N>=?utf-8?B?name?=</N><RT>sent</RT>…</M></MD>`, or `too-large` (then `GetMetadata`).
+- `rsi.asmx` (`PassportCookie` with the messenger.msn.com ticket's `t`/`p`) serves `GetMessage`, an RFC
+  822 message with a base64 body, and `DeleteMessages`.
+- `oim.asmx` `Store2` takes the text as base64 MIME with `X-OIM-Run-Id` (one GUID per recipient) and
+  `X-OIM-Sequence-Num`. The first attempt has an empty `lockkey`; the `AuthenticationFailed` fault carries
+  a `LockKeyChallenge`, and the lock key is the CHL algorithm (§3) applied to it.
+- Escargot accepts any non-empty lock key, and writes the `Date:` header in Pacific time but always
+  labels it `-0800`, an hour off in summer; the Mail-Data `RT` (UTC) is reliable.
+
+**P2P (MSNC7, WLM 8.1)**, cross-checked against libpurple's MSN plugin, which interoperated with WLM 8:
+- Switchboard `MSG … D` with `Content-Type: application/x-msnmsgrp2p` and `P2P-Dest`; a 48-byte
+  little-endian header (session, identifier, offset, total size, length, flags, ack fields), at most 1202
+  bytes of payload, and a big-endian footer (0 SLP, 1 objects, 2 files). Every complete message except an
+  ACK is acknowledged (flags 0x2, echoing identifier, ack identifier and size).
+- MSNSLP `INVITE` (`application/x-msnmsgr-sessionreqbody`: EUF-GUID, SessionID, AppID, base64 Context),
+  `200 OK`, `603 Decline` and `BYE`. Objects use EUF-GUID {A4268EEC-…}: data preparation (4 zero bytes),
+  then the data with flags 0x20. Files use {5D3E02AB-…} and a 574-byte context (version 2: size, UTF-16LE
+  name); data flags 0x01000030. A `transreqbody` (direct-connection) INVITE is answered "Listening:
+  false", so data stays on the switchboard.
+- Display pictures are `msnobj` type 3 in `CHG`/`NLN`/`ILN`; SHA1C is the SHA-1 of the other fields with
+  their names. Escargot only passes a new msnobj to contacts on a status change (`me_update` notifies on
+  substatus, name or message), so a picture changed mid-session reaches contacts at their next sign-in
+  or your next status change. It relays P2P messages verbatim (`front_cache['msnp']`).
+- Winks are `text/x-msnmsgr-datacast` ID 2 with an msnobj (type 8) for a cabinet (MSZIP) holding
+  content.xml, a preview image and the Flash animation; the apps show the preview.
+- Capabilities: the port advertises MSNC7 + winks (0x8000) + multi-packet (0x20), not direct IM.
+
+Not ported: voice and video (WLM 8.1's RTC stack with direct connections, which Escargot doesn't relay),
+playing winks (Flash), custom emoticons, ink, Hotmail inbox counts, MSN Spaces/Today and group editing.

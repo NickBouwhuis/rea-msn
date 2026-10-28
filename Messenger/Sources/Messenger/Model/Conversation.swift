@@ -7,6 +7,12 @@ struct ChatLine: Identifiable, Equatable {
 		case nudge(senderName: String, outgoing: Bool)
 		case notice(String)
 		case failed(text: String, reason: String)
+		/// Left while we were offline; shown as "X says (time):".
+		case offline(sender: String, senderName: String, text: String, sent: Date?)
+		/// A file transfer; its current state is in `ConversationModel.transfers`.
+		case file(id: String)
+		/// A wink's preview image (WLM's winks are Flash animations).
+		case wink(senderName: String, image: Data?)
 	}
 
 	let id = UUID()
@@ -26,10 +32,22 @@ final class ConversationModel: ObservableObject, Identifiable {
 	@Published private(set) var peerName: String?
 	@Published var draft = ""
 	@Published var format = ConversationModel.savedFormat
+	/// Everyone in the conversation besides us (more than one: a group conversation).
+	@Published var participants: [String]
+	@Published private(set) var transfers: [String: FileTransfer] = [:]
+	/// Whether we've said this contact is offline and messages will wait for them.
+	var toldOffline = false
 	private var typingExpiry: [String: Task<Void, Never>] = [:]
 
 	init(peer: String) {
 		self.peer = peer
+		participants = [peer]
+	}
+
+	/// Adds a transfer's line the first time it's seen, then keeps its state current.
+	func update(_ t: FileTransfer) {
+		if transfers[t.id] == nil { lines.append(ChatLine(kind: .file(id: t.id))) }
+		transfers[t.id] = t
 	}
 
 	func append(_ kind: ChatLine.Kind) {
@@ -39,6 +57,7 @@ final class ConversationModel: ObservableObject, Identifiable {
 			if sender == peer { peerName = senderName }
 			stopTyping(sender)
 		}
+		if case let .offline(sender, senderName, _, _) = kind, sender == peer { peerName = senderName }
 	}
 
 	/// WLM shows "X is typing a message." for ~6 s after each control message.

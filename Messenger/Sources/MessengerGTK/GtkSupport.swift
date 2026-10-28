@@ -84,6 +84,106 @@ func onTick(_ widget: Ptr, _ fn: @escaping (Int64) -> Bool) {
 	gtk_widget_add_tick_callback(c(widget), t, Unmanaged.passRetained(cb).toOpaque(), free)
 }
 
+// MARK: - Images and files
+
+/// A paintable for image bytes (PNG, JPEG, GIF…), or nil if they don't decode.
+func texture(from data: Data) -> OpaquePointer? {
+	let bytes = data.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }
+	defer { g_bytes_unref(bytes) }
+	return gdk_texture_new_from_bytes(bytes, nil)
+}
+
+/// Shows `data` in a picture, or the file at `fallback` when there's none.
+func setPicture(_ p: Ptr, data: Data?, fallback: String?) {
+	if let data, let t = texture(from: data) {
+		gtk_picture_set_paintable(c(p), t)
+		g_object_unref(UnsafeMutableRawPointer(t))
+	} else {
+		setPicture(p, fallback)
+	}
+}
+
+private final class PathsCallback {
+	let fn: ([String]) -> Void
+	init(_ fn: @escaping ([String]) -> Void) { self.fn = fn }
+}
+
+/// GtkFileDialog: lets the user pick files (or one image) and calls back with
+/// their paths; nothing if they cancel.
+func chooseFiles(parent: Ptr?, title: String, multiple: Bool, imagesOnly: Bool = false, _ done: @escaping ([String]) -> Void) {
+	let dialog = gtk_file_dialog_new()!
+	gtk_file_dialog_set_title(dialog, title)
+	if imagesOnly {
+		let filter = gtk_file_filter_new()!
+		gtk_file_filter_set_name(filter, "Images")
+		gtk_file_filter_add_mime_type(filter, "image/*")
+		let filters = g_list_store_new(gtk_file_filter_get_type())!
+		g_list_store_append(filters, UnsafeMutableRawPointer(filter))
+		gtk_file_dialog_set_filters(dialog, filters)
+		g_object_unref(UnsafeMutableRawPointer(filter))
+		g_object_unref(UnsafeMutableRawPointer(filters))
+	}
+	let box = Unmanaged.passRetained(PathsCallback(done)).toOpaque()
+	let window: UnsafeMutablePointer<GtkWindow>? = parent.map { c($0) }
+	if multiple {
+		let cb: GAsyncReadyCallback = { source, result, data in
+			let callback = Unmanaged<PathsCallback>.fromOpaque(data!).takeRetainedValue()
+			var paths: [String] = []
+			if let list = gtk_file_dialog_open_multiple_finish(OpaquePointer(source), result, nil) {
+				for i in 0..<g_list_model_get_n_items(list) {
+					guard let file = g_list_model_get_item(list, i) else { continue }
+					if let path = g_file_get_path(OpaquePointer(file)) {
+						paths.append(String(cString: path))
+						g_free(path)
+					}
+					g_object_unref(file)
+				}
+				g_object_unref(UnsafeMutableRawPointer(list))
+			}
+			callback.fn(paths)
+			g_object_unref(UnsafeMutableRawPointer(source))
+		}
+		gtk_file_dialog_open_multiple(dialog, window, nil, cb, box)
+	} else {
+		let cb: GAsyncReadyCallback = { source, result, data in
+			let callback = Unmanaged<PathsCallback>.fromOpaque(data!).takeRetainedValue()
+			var paths: [String] = []
+			if let file = gtk_file_dialog_open_finish(OpaquePointer(source), result, nil) {
+				if let path = g_file_get_path(file) {
+					paths.append(String(cString: path))
+					g_free(path)
+				}
+				g_object_unref(UnsafeMutableRawPointer(file))
+			}
+			callback.fn(paths)
+			g_object_unref(UnsafeMutableRawPointer(source))
+		}
+		gtk_file_dialog_open(dialog, window, nil, cb, box)
+	}
+}
+
+/// WLM's display pictures are 96×96: the image centre-cropped and scaled, as PNG.
+func tilePNG(path: String) -> Data? {
+	guard let full = gdk_pixbuf_new_from_file(path, nil) else { return nil }
+	defer { g_object_unref(UnsafeMutableRawPointer(full)) }
+	let w = gdk_pixbuf_get_width(full), h = gdk_pixbuf_get_height(full), side = min(w, h)
+	guard side > 0, let square = gdk_pixbuf_new_subpixbuf(full, (w - side) / 2, (h - side) / 2, side, side) else { return nil }
+	defer { g_object_unref(UnsafeMutableRawPointer(square)) }
+	guard let scaled = gdk_pixbuf_scale_simple(square, 96, 96, GDK_INTERP_BILINEAR) else { return nil }
+	defer { g_object_unref(UnsafeMutableRawPointer(scaled)) }
+	var buffer: UnsafeMutablePointer<gchar>?
+	var size: gsize = 0
+	guard gdk_pixbuf_save_to_bufferv(scaled, &buffer, &size, "png", nil, nil, nil) != 0, let buffer else { return nil }
+	defer { g_free(buffer) }
+	return Data(bytes: buffer, count: Int(size))
+}
+
+/// Opens a file or folder with the desktop's default app.
+func openWithDefaultApp(_ path: String) {
+	let uri = URL(fileURLWithPath: path).absoluteString
+	g_app_info_launch_default_for_uri(uri, nil, nil)
+}
+
 /// Swift's main queue (and MainActor jobs) on Linux run from Foundation's
 /// main run loop; GTK owns the main thread, so pump it from GLib.
 func pumpSwiftMainQueue() {

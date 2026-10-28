@@ -1,6 +1,7 @@
 import AppKit
 import MSNKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -29,6 +30,9 @@ final class AppModel: ObservableObject {
 	@Published private(set) var groups: [ABGroup] = []
 	@Published var addRequests: [AddRequest] = []
 	@Published var alert: String?
+	/// Bumped when any display picture changes, so views showing them redraw.
+	@Published private(set) var pictureVersion = 0
+	private var pictureImages: [String: (data: Data, image: NSImage)] = [:]
 
 	private(set) var client: MessengerClient?
 	private(set) var conversations: [String: ConversationModel] = [:]
@@ -59,14 +63,16 @@ final class AppModel: ObservableObject {
 
 		let client = MessengerClient(config: settings.serverConfig)
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
-			client.log = { print($0) }
+			client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered
 		}
 		client.onEvent = { [weak self] in self?.handle($0) }
+		client.displayPictureDirectory = Self.supportDirectory.appendingPathComponent("Pictures", isDirectory: true)
 		self.client = client
 		myEmail = email
 		phase = .signingIn("Signing in...")
 		Task {
 			do {
+				await client.setDisplayPicture(try? Data(contentsOf: myPictureURL))
 				try await client.signIn(email: email, password: password, status: status)
 			} catch {
 				self.client = nil
@@ -124,6 +130,62 @@ final class AppModel: ObservableObject {
 		Task { do { try await client.setPersonalMessage(text) } catch { self.alert = error.localizedDescription } }
 	}
 
+	// MARK: - Display pictures
+
+	static var supportDirectory: URL {
+		FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+			.appendingPathComponent("MessengerMac", isDirectory: true)
+	}
+
+	/// Our display picture, one per account as in WLM.
+	private var myPictureURL: URL {
+		Self.supportDirectory.appendingPathComponent("DisplayPictures", isDirectory: true).appendingPathComponent("\(myEmail).png")
+	}
+
+	/// Someone's display picture (ours for our own address), if we have it.
+	func displayPicture(of email: String) -> NSImage? {
+		_ = pictureVersion
+		let data = email == myEmail ? (client?.displayPicture ?? (try? Data(contentsOf: myPictureURL))) : client?.displayPicture(of: email)
+		guard let data else { return nil }
+		if let hit = pictureImages[email], hit.data == data { return hit.image }
+		guard let image = NSImage(data: data) else { return nil }
+		pictureImages[email] = (data, image)
+		return image
+	}
+
+	func chooseDisplayPicture() {
+		let panel = NSOpenPanel()
+		panel.title = Skin.shared.string(2092, "Select a Display Picture")
+		panel.allowedContentTypes = [.image]
+		panel.allowsMultipleSelection = false
+		guard panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url), let png = Self.tilePNG(image) else { return }
+		setDisplayPicture(png)
+	}
+
+	func setDisplayPicture(_ png: Data?) {
+		try? FileManager.default.createDirectory(at: myPictureURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+		if let png { try? png.write(to: myPictureURL) } else { try? FileManager.default.removeItem(at: myPictureURL) }
+		pictureVersion += 1
+		guard let client else { return }
+		Task { await client.setDisplayPicture(png) }
+	}
+
+	/// WLM's display pictures are 96×96: centre-cropped and scaled, as PNG.
+	static func tilePNG(_ image: NSImage) -> Data? {
+		let side = 96
+		guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+		                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+		                                 bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+		NSGraphicsContext.saveGraphicsState()
+		NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+		let size = image.size, crop = min(size.width, size.height)
+		image.draw(in: NSRect(x: 0, y: 0, width: side, height: side),
+		           from: NSRect(x: (size.width - crop) / 2, y: (size.height - crop) / 2, width: crop, height: crop),
+		           operation: .copy, fraction: 1)
+		NSGraphicsContext.restoreGraphicsState()
+		return rep.representation(using: .png, properties: [:])
+	}
+
 	// MARK: - Contacts
 
 	func addContact(_ email: String) {
@@ -170,7 +232,8 @@ final class AppModel: ObservableObject {
 	}
 
 	func name(of email: String) -> String {
-		email == myEmail ? myName : (contact(email)?.displayName ?? conversations[email]?.peerName ?? email)
+		if email == myEmail { return myName }
+		return client?.bestName(of: email, fallback: conversations[email]?.peerName) ?? conversations[email]?.peerName ?? email
 	}
 
 	// MARK: - Conversations
@@ -183,7 +246,65 @@ final class AppModel: ObservableObject {
 	}
 
 	func openConversation(_ peer: String, activate: Bool = true) {
-		windows.show(conversation(with: peer), activate: activate)
+		let convo = conversation(with: peer)
+		windows.show(convo, activate: activate)
+		client?.requestDisplayPicture(of: peer)
+		if let c = contact(peer), !c.status.isOnline { tellOffline(convo) }
+	}
+
+	/// "X appears to be offline. Messages you send will be delivered when they sign in.", once.
+	private func tellOffline(_ convo: ConversationModel) {
+		guard !convo.toldOffline else { return }
+		convo.toldOffline = true
+		let text = Skin.shared.string(20088, "%1 appears to be offline. Messages you send will be delivered when they sign in.")
+			.replacingOccurrences(of: #"\s*\{A:\d+\}( \| \{A:\d+\})*"#, with: "", options: .regularExpression)
+		convo.append(.notice(text.replacingOccurrences(of: "%1", with: name(of: convo.peer))))
+	}
+
+	func invite(_ email: String, into peer: String) {
+		guard let client else { return }
+		Task {
+			do { try await client.invite(email, into: peer) } catch {
+				self.conversation(with: peer).append(.notice(Skin.shared.string(2074, "Your invitation to join this conversation could not be delivered to %1.")
+					.replacingOccurrences(of: "%1", with: self.name(of: email))))
+			}
+		}
+	}
+
+	// MARK: - Files
+
+	func sendFiles(_ urls: [URL], to peer: String) {
+		guard let client else { return }
+		for url in urls {
+			do { try client.sendFile(url, to: peer) } catch {
+				conversation(with: peer).append(.notice(Skin.shared.string(2105, "The invitation could not be sent.")))
+			}
+		}
+	}
+
+	func acceptFile(_ t: FileTransfer) { client?.acceptFile(t.id, saveTo: Self.downloadURL(for: t.name)) }
+	func declineFile(_ t: FileTransfer) { client?.declineFile(t.id) }
+	func cancelFile(_ t: FileTransfer) { client?.cancelFile(t.id) }
+
+	func openFile(_ t: FileTransfer) {
+		if let url = t.fileURL { NSWorkspace.shared.open(url) }
+	}
+
+	func revealFile(_ t: FileTransfer) {
+		if let url = t.fileURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+	}
+
+	/// ~/Downloads/name, or "name 2" etc. if that's taken.
+	static func downloadURL(for name: String) -> URL {
+		let dir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
+		let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+		var url = dir.appendingPathComponent(name)
+		var n = 2
+		while FileManager.default.fileExists(atPath: url.path) {
+			url = dir.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+			n += 1
+		}
+		return url
 	}
 
 	func send(_ text: String, to peer: String) {
@@ -272,6 +393,8 @@ final class AppModel: ObservableObject {
 			NSApp.requestUserAttention(.informationalRequest)
 		case let .conversation(peer, event):
 			handleConversation(peer, event)
+		case .displayPictureChanged:
+			pictureVersion += 1
 		case let .signedOut(reason):
 			windows.closeAll()
 			conversations.removeAll()
@@ -305,14 +428,42 @@ final class AppModel: ObservableObject {
 			openConversation(peer, activate: false)
 			windows.shake(peer)
 			sounds.play(.nudge)
-		case .joined:
-			break
+		case let .joined(email, _):
+			let wasIn = convo.participants.contains(email)
+			convo.participants = client?.participants(inConversationWith: peer) ?? [peer]
+			if !wasIn, email != peer {
+				convo.append(.notice(Skin.shared.string(2032, "%1 has been added to the conversation.").replacingOccurrences(of: "%1", with: name(of: email))))
+			}
 		case let .left(email):
-			if conversations[peer] != nil, windows.isOpen(peer), email != peer {
-				convo.append(.notice("\(name(of: email)) has left the conversation."))
+			let wasGroup = convo.participants.count > 1
+			convo.participants = client?.participants(inConversationWith: peer) ?? [peer]
+			if conversations[peer] != nil, windows.isOpen(peer), email != peer || wasGroup {
+				convo.append(.notice(Skin.shared.string(2033, "%1 has left the conversation.").replacingOccurrences(of: "%1", with: name(of: email))))
 			}
 		case let .deliveryFailed(text, reason):
 			convo.append(.failed(text: text, reason: reason))
+		case let .offlineMessage(from, name, text, sent):
+			convo.append(.offline(sender: from, senderName: name, text: text, sent: sent))
+			openConversation(peer, activate: false)
+			if !windows.isKey(peer) {
+				sounds.play(.newConversation)
+				if settings.showToasts {
+					toasts.show(title: "\(name) says:", body: text, peer: peer) { [weak self] in self?.openConversation(peer) }
+				}
+			}
+		case .storedOffline:
+			tellOffline(convo)
+		case let .file(t):
+			convo.update(t)
+			if t.incoming, t.state == .offered {
+				openConversation(peer, activate: false)
+				sounds.play(.incoming)
+				NSApp.requestUserAttention(.informationalRequest)
+			}
+		case let .wink(_, name, thumbnail):
+			convo.append(.wink(senderName: name, image: thumbnail))
+			openConversation(peer, activate: false)
+			if !windows.isKey(peer) { sounds.play(.incoming) }
 		}
 	}
 }

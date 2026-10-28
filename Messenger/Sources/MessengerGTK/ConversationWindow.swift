@@ -17,12 +17,22 @@ final class ConversationWindow {
 	private let content: Ptr
 	private var typingUntil = Date.distantPast
 	private var lastTypingSent = Date.distantPast
+	private let activities: Ptr
+	private let peerPicture: Ptr
+	private let peerTile: Ptr
+	private let myPicture: Ptr
+	/// Everyone in the conversation besides us (more than one: a group conversation).
+	private(set) var participants: [String]
+	/// Whether we've said this contact is offline and messages will wait for them.
+	var toldOffline = false
+	private var transferRows: [String: (label: Ptr, progress: Ptr, actions: Ptr)] = [:]
 	private let skin = Skin.shared
 	private let state = AppState.shared
 	private var format = TextFormat()
 
 	init(peer: String) {
 		self.peer = peer
+		participants = [peer]
 		let name = AppState.shared.name(of: peer)
 		let (w, t) = Chrome.window(app: AppState.shared.app, width: 560, height: 520, title: name, subtitle: "<\(peer)>")
 		window = w
@@ -30,10 +40,8 @@ final class ConversationWindow {
 
 		content = vbox(0)
 
-		let activities = hbox(2)
+		activities = hbox(2)
 		margins(activities, top: 2, start: 8, bottom: 2, end: 8)
-		for (id, tip) in R.activity { append(activities, button(picture(Skin.shared.image(id)), css: ["wlm-flat"], tooltip: tip) {}) }
-		append(activities, spacer())
 		append(content, activities)
 
 		let body = hbox(8)
@@ -72,9 +80,11 @@ final class ConversationWindow {
 		append(body, left)
 
 		let pictures = vbox(0)
-		append(pictures, Self.tile(Skin.shared))
+		(peerTile, peerPicture) = Self.tile(Skin.shared)
+		append(pictures, peerTile)
 		append(pictures, spacer(v: true))
-		let me = Self.tile(Skin.shared)
+		let me: Ptr
+		(me, myPicture) = Self.tile(Skin.shared)
 		margins(me, bottom: 4)
 		append(pictures, me)
 		append(body, pictures)
@@ -88,6 +98,16 @@ final class ConversationWindow {
 		gtk_window_set_child(c(window), c(content))
 
 		// Wiring that needs self.
+		for (id, tip) in R.activity {
+			let b = button(picture(skin.image(id)), css: ["wlm-flat"], tooltip: tip) {}
+			switch id {
+			case 1441: on(b, "clicked") { [weak self] in self?.showInvite(anchor: b) }
+			case 1444: on(b, "clicked") { [weak self] in self?.shareFiles() }
+			default: break
+			}
+			append(activities, b)
+		}
+		append(activities, spacer())
 		for (id, tip) in R.format {
 			append(formatBar, button(picture(skin.image(id)), css: ["wlm-flat"], tooltip: tip) { [weak self] in
 				guard let self else { return }
@@ -122,14 +142,101 @@ final class ConversationWindow {
 			return true
 		}
 		insert("Never give out your password or credit card number in an instant message conversation.\n", markup: false, muted: true)
+		refreshPictures()
 	}
 
-	private static func tile(_ skin: Skin) -> Ptr {
+	private static func tile(_ skin: Skin) -> (frame: Ptr, picture: Ptr) {
 		let p = picture(skin.image(R.defaultTileLarge), size: (96, 96))
 		expand(p)
 		let frame = hbox(0, [p], css: ["wlm-tile"])
 		expand(frame)
-		return frame
+		return (frame, p)
+	}
+
+	/// youusertile (top; hidden in a group conversation) and meusertile (bottom).
+	func refreshPictures() {
+		let fallback = skin.image(R.defaultTileLarge)
+		setPicture(peerPicture, data: state.displayPicture(of: peer), fallback: fallback)
+		setPicture(myPicture, data: state.displayPicture(of: state.myEmail), fallback: fallback)
+		visible(peerTile, participants.count <= 1)
+	}
+
+	func updateParticipants(_ list: [String]) {
+		participants = list.isEmpty ? [peer] : list
+		refreshHeader()
+		refreshPictures()
+	}
+
+	/// Online contacts not in the conversation yet, in a popover.
+	private func showInvite(anchor: Ptr) {
+		let menu = vbox(0)
+		let pop = raw(gtk_popover_new())
+		let candidates = state.contacts.filter { $0.status.isOnline && !participants.contains($0.email) }
+		append(menu, label("Invite someone to this conversation:", css: ["wlm-bold"]))
+		if candidates.isEmpty { append(menu, label("None of your other contacts are online.", css: ["wlm-muted"])) }
+		for c in candidates {
+			append(menu, menuItem(c.displayName) { [weak self] in
+				popdown(pop)
+				if let self { self.state.invite(c.email, into: self.peer) }
+			})
+		}
+		gtk_popover_set_child(c(pop), c(menu))
+		gtk_widget_set_parent(c(pop), c(anchor))
+		on(pop, "closed") { gtk_widget_unparent(c(pop)) }
+		gtk_popover_popup(c(pop))
+	}
+
+	private func shareFiles() {
+		let title = skin.string(2110, "Send a File to %1").replacingOccurrences(of: "%1", with: state.name(of: peer))
+		chooseFiles(parent: window, title: title, multiple: true) { [weak self] paths in
+			guard let self, !paths.isEmpty else { return }
+			self.state.sendFiles(paths, to: self.peer)
+		}
+	}
+
+	/// A file transfer: WLM's invitation text, a progress bar while it runs,
+	/// and Accept/Decline/Cancel (or Open) buttons; updated in place.
+	func showTransfer(_ t: FileTransfer) {
+		if transferRows[t.id] == nil {
+			var end = GtkTextIter()
+			gtk_text_buffer_get_end_iter(buffer, &end)
+			let anchor = gtk_text_buffer_create_child_anchor(buffer, &end)
+			let text = label("", css: ["wlm-label"], wrap: true)
+			// A wrapping label in a text view needs a width to wrap at.
+			gtk_label_set_width_chars(c(text), 50)
+			gtk_label_set_max_width_chars(c(text), 60)
+			let progress = raw(gtk_progress_bar_new())
+			gtk_widget_set_size_request(c(progress), 220, -1)
+			let actions = hbox(10)
+			let row = vbox(3, [text, progress, actions])
+			margins(row, top: 2, bottom: 2)
+			gtk_text_view_add_child_at_anchor(c(history), c(row), anchor)
+			insert("\n", markup: false)
+			transferRows[t.id] = (text, progress, actions)
+		}
+		guard let row = transferRows[t.id] else { return }
+		setText(row.label, t.text(peerName: state.name(of: t.peer)) { skin.string($0, $1) })
+		visible(row.progress, t.state == .transferring)
+		gtk_progress_bar_set_fraction(c(row.progress), t.progress)
+		removeAllChildren(row.actions)
+		func link(_ title: String, _ action: @escaping () -> Void) {
+			append(row.actions, button(label: title, css: ["wlm-link"], action))
+		}
+		switch t.state {
+		case .offered:
+			link(skin.string(2052, "Accept")) { [weak self] in self?.state.acceptFile(t) }
+			link(skin.string(2053, "Decline")) { [weak self] in self?.state.declineFile(t) }
+		case .waiting, .transferring:
+			link(skin.string(2054, "Cancel")) { [weak self] in self?.state.cancelFile(t) }
+		case .completed where t.incoming:
+			if let path = t.fileURL?.path {
+				link("Open") { openWithDefaultApp(path) }
+				link("Open folder") { openWithDefaultApp((path as NSString).deletingLastPathComponent) }
+			}
+		default:
+			break
+		}
+		scrollToEnd()
 	}
 
 	var isActive: Bool { gtk_window_is_active(c(window)) != 0 }
@@ -138,7 +245,7 @@ final class ConversationWindow {
 	func close() { gtk_window_destroy(c(window)) }
 
 	func refreshHeader() {
-		let name = state.name(of: peer)
+		let name = participants.count > 1 ? participants.map { state.name(of: $0) }.joined(separator: ", ") : state.name(of: peer)
 		gtk_window_set_title(c(window), name)
 		if let titleBox, let first = gtk_widget_get_first_child(c(titleBox)) {
 			gtk_box_remove(c(titleBox), first)
@@ -168,6 +275,26 @@ final class ConversationWindow {
 		case let .failed(text, reason):
 			insert("<span foreground=\"#CC0000\">The following message could not be delivered to all recipients:</span>\n", markup: true)
 			insert("    \(text)\n    \(reason)\n", markup: false, muted: true)
+		case let .offline(sender, text, sent):
+			// "%1 says (%3):" with when it was sent.
+			let when = sent.map { Self.time.string(from: $0) } ?? "offline"
+			let says = skin.string(2042, "%1 says (%3):").replacingOccurrences(of: "%3", with: when)
+			insertEmoticonText(says.replacingOccurrences(of: "%1", with: sender), style: "foreground=\"#777777\"")
+			insert("\n    ", markup: false)
+			insertEmoticonText(text, style: "foreground=\"#000000\"")
+			insert("\n", markup: false)
+			setText(status, "Last message received at \(Self.time.string(from: Date())).")
+		case let .wink(sender, image):
+			insert(skin.string(2345, "%1 winks:").replacingOccurrences(of: "%1", with: sender) + "\n", markup: false, muted: true)
+			if let image, let t = texture(from: image) {
+				var end = GtkTextIter()
+				gtk_text_buffer_get_end_iter(buffer, &end)
+				insert("    ", markup: false)
+				gtk_text_buffer_get_end_iter(buffer, &end)
+				gtk_text_buffer_insert_paintable(buffer, &end, t)
+				g_object_unref(UnsafeMutableRawPointer(t))
+				insert("\n", markup: false)
+			}
 		}
 		scrollToEnd()
 	}

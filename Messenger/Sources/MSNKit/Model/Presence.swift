@@ -55,6 +55,8 @@ public struct Contact: Identifiable, Hashable {
 	public var lists: MSNList = []
 	public var groupIDs: [String] = []
 	public var capabilities: UInt32 = 0
+	/// The display picture they advertise (`NLN`/`ILN` msnobj), fetched on demand.
+	public var displayPicture: MSNObject?
 
 	public init(email: String, displayName: String? = nil) {
 		self.email = email.lowercased()
@@ -75,11 +77,12 @@ public enum ClientIdentity {
 	public static let clientVersion = "8.1.0178"
 
 	/// FUN_0052faa8 starts from 0x7048C024 and always ORs 0x06000000; the high
-	/// nibble 7 is the MSNC7 (WLM 8.1) P2P version. This port implements text
-	/// IM only, so it advertises MSNC7 + multi-packet messaging (0x20) and not
-	/// ink/webcam/P2P feature bits that would invite unsupported sessions.
+	/// nibble 7 is the MSNC7 (WLM 8.1) P2P version, which covers display
+	/// pictures and file transfer over the switchboard. The port advertises
+	/// MSNC7 + winks (0x8000) + multi-packet messaging (0x20), and not the
+	/// direct-IM, ink or webcam/voice bits for sessions it doesn't support.
 	public static let wlm81Capabilities: UInt32 = 0x7648_C024
-	public static let advertisedCapabilities: UInt32 = 0x7000_0020
+	public static let advertisedCapabilities: UInt32 = 0x7000_8020
 
 	public static func cvrArguments(email: String) -> [String] {
 		[locale, "winnt", "5.1", "i386", clientName, clientVersion, "msmsgs", email]

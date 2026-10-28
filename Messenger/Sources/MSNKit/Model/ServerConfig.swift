@@ -39,4 +39,8 @@ public struct ServerConfig: Codable, Equatable, Hashable {
 	public var sharingServiceURL: URL { contactsBaseURL.appendingPathComponent("abservice/SharingService.asmx") }
 	/// Was https://tkrdr.storage.msn.com/storageservice/SchematizedStore.asmx.
 	public var storageServiceURL: URL { contactsBaseURL.appendingPathComponent("storageservice/SchematizedStore.asmx") }
+	/// Was https://rsi.hotmail.com/rsi/rsi.asmx: listing, fetching and deleting offline messages.
+	public var rsiURL: URL { contactsBaseURL.appendingPathComponent("rsi/rsi.asmx") }
+	/// Was https://ows.messenger.msn.com/OimWS/oim.asmx: storing an offline message.
+	public var oimURL: URL { contactsBaseURL.appendingPathComponent("OimWS/oim.asmx") }
 }

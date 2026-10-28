@@ -111,11 +111,17 @@ another host.
 - Add, delete, block and unblock contacts; the "X has added you" prompt
 - Conversations: formatted text (font, colour, bold, italic), WLM emoticons, typing indicator, nudges
   (window shake), multi-packet messages, delivery-failure notices
+- Group conversations: invite contacts into a conversation, and join ones you're invited to
+- Offline messages: write to an offline contact and they get it when they sign in; messages left for
+  you arrive when you do
+- Display pictures: set your own (scaled to WLM's 96×96) and see your contacts', fetched peer-to-peer
+- File transfer: send files, accept or decline incoming ones, with progress (through the switchboard)
+- Winks: shown as their preview image (WLM's winks are Flash animations, which can't be played)
 - WLM-style toasts (macOS) or desktop notifications (Linux), sounds, and "remember me / my password"
   through the Keychain or the Secret Service
 
-The port has no P2P stack, so display pictures, file transfer, winks, voice and video are not
-supported, and neither are offline messages. See the RE notes for details.
+Not supported: voice and video calls. WLM 8.1 sets those up with direct connections that Escargot
+doesn't relay. See the RE notes for details.
 
 ## Testing
 
@@ -123,12 +129,15 @@ supported, and neither are offline messages. See the RE notes for details.
 cd devserver && docker compose up -d --build     # local Escargot: NS :1863, SB :1864, HTTP :8081
 cd ../Messenger
 swift test                                       # protocol unit tests
-swift run msnctl --local e2e alice@example.com bob@example.com 123456
+swift run msnctl --local e2e alice@example.com bob@example.com 123456 carol@example.com
 ```
 
-The e2e scenario signs in two clients and checks each WLM feature end to end:
-sign-in, a rejected bad password, presence, name and PSM, contact add and approval, IM in both
-directions, typing, nudge, offline delivery failure, block/unblock, and roaming after re-sign-in.
+The e2e scenario signs in the clients and checks each WLM feature end to end: sign-in, a rejected
+bad password, presence, name and PSM, contact add and approval, IM in both directions, typing,
+nudge, a group conversation (with the third account), display pictures, a file transfer and a
+declined one, a wink, an offline message stored and delivered, block/unblock, and roaming after
+re-sign-in. `msnctl say … --picture FILE --invite EMAIL`, `msnctl sendfile` and `msnctl wink` drive
+the apps from another account.
 Seeded test accounts are `alice@`, `bob@` and `carol@example.com`, all with password `123456`.
 `msnctl --escargot check you@escargot.chat -` is a read-only sign-in summary against the live
 service (Appear Offline; `-` reads the password from `$MSN_PASSWORD`).

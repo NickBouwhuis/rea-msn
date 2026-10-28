@@ -53,6 +53,10 @@ struct ChatLine {
 		case nudge(name: String, outgoing: Bool)
 		case notice(String)
 		case failed(text: String, reason: String)
+		/// Left while we were offline; shown as "X says (time):".
+		case offline(senderName: String, text: String, sent: Date?)
+		/// A wink's preview image (WLM's winks are Flash animations).
+		case wink(senderName: String, image: Data?)
 	}
 	let kind: Kind
 	let date = Date()
@@ -82,6 +86,7 @@ final class AppState {
 	var onPhase: [() -> Void] = []
 	var onContacts: [() -> Void] = []
 	var onProfile: [() -> Void] = []
+	var onPictures: [() -> Void] = []
 	var onAddRequest: (() -> Void)?
 
 	private(set) var conversations: [String: ConversationWindow] = [:]
@@ -106,14 +111,16 @@ final class AppState {
 		if rememberPassword { SecretStore.set(password, for: email) } else { SecretStore.delete(email) }
 
 		let client = MessengerClient(config: settings.serverConfig)
-		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil { client.log = { print($0) } }
+		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil { client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered }
 		client.onEvent = { [weak self] in self?.handle($0) }
+		client.displayPictureDirectory = Self.dataDirectory.appendingPathComponent("Pictures", isDirectory: true)
 		self.client = client
 		myEmail = email
 		phase = .signingIn("Signing in...")
 		notify(onPhase)
 		Task {
 			do {
+				await client.setDisplayPicture(try? Data(contentsOf: myPictureURL))
 				try await client.signIn(email: email, password: password, status: status)
 			} catch {
 				self.client = nil
@@ -171,7 +178,50 @@ final class AppState {
 	func contact(_ email: String) -> Contact? { client?.contacts[email] }
 
 	func name(of email: String) -> String {
-		email == myEmail ? myName : (contact(email)?.displayName ?? conversations[email]?.peerName ?? email)
+		if email == myEmail { return myName }
+		return client?.bestName(of: email, fallback: conversations[email]?.peerName) ?? conversations[email]?.peerName ?? email
+	}
+
+	// MARK: Display pictures
+
+	static var dataDirectory: URL {
+		(ProcessInfo.processInfo.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0) }
+			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share"))
+			.appendingPathComponent("messenger-wlm", isDirectory: true)
+	}
+
+	/// Our display picture, one per account as in WLM.
+	private var myPictureURL: URL {
+		Self.dataDirectory.appendingPathComponent("DisplayPictures", isDirectory: true).appendingPathComponent("\(myEmail).png")
+	}
+
+	/// Someone's display picture (ours for our own address), if we have it.
+	func displayPicture(of email: String) -> Data? {
+		email == myEmail ? (client?.displayPicture ?? (try? Data(contentsOf: myPictureURL))) : client?.displayPicture(of: email)
+	}
+
+	func chooseDisplayPicture() {
+		chooseFiles(parent: mainWindow, title: Skin.shared.string(2092, "Select a Display Picture"), multiple: false, imagesOnly: true) { [weak self] paths in
+			guard let path = paths.first else { return }
+			guard let png = tilePNG(path: path) else {
+				self?.alert("That picture couldn't be opened.")
+				return
+			}
+			self?.setDisplayPicture(png)
+		}
+	}
+
+	func setDisplayPicture(_ png: Data?) {
+		try? FileManager.default.createDirectory(at: myPictureURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+		if let png { try? png.write(to: myPictureURL) } else { try? FileManager.default.removeItem(at: myPictureURL) }
+		picturesChanged()
+		guard let client else { return }
+		Task { await client.setDisplayPicture(png) }
+	}
+
+	private func picturesChanged() {
+		notify(onPictures)
+		for w in conversations.values { w.refreshPictures() }
 	}
 
 	// MARK: Conversations
@@ -181,10 +231,65 @@ final class AppState {
 		let w = conversations[peer] ?? {
 			let w = ConversationWindow(peer: peer)
 			conversations[peer] = w
+			client?.requestDisplayPicture(of: peer)
+			if let c = contact(peer), !c.status.isOnline { tellOffline(w) }
 			return w
 		}()
 		if present { w.present() }
 		return w
+	}
+
+	/// "X appears to be offline. Messages you send will be delivered when they sign in.", once.
+	private func tellOffline(_ w: ConversationWindow) {
+		guard !w.toldOffline else { return }
+		w.toldOffline = true
+		let text = Skin.shared.string(20088, "%1 appears to be offline. Messages you send will be delivered when they sign in.")
+			.replacingOccurrences(of: #"\s*\{A:\d+\}( \| \{A:\d+\})*"#, with: "", options: .regularExpression)
+		w.post(.notice(text.replacingOccurrences(of: "%1", with: name(of: w.peer))))
+	}
+
+	func participants(with peer: String) -> [String] {
+		client?.participants(inConversationWith: peer) ?? [peer]
+	}
+
+	func invite(_ email: String, into peer: String) {
+		guard let client else { return }
+		Task {
+			do { try await client.invite(email, into: peer) } catch {
+				self.conversations[peer]?.post(.notice(Skin.shared.string(2074, "Your invitation to join this conversation could not be delivered to %1.")
+					.replacingOccurrences(of: "%1", with: self.name(of: email))))
+			}
+		}
+	}
+
+	// MARK: Files
+
+	func sendFiles(_ paths: [String], to peer: String) {
+		guard let client else { return }
+		for path in paths {
+			do { try client.sendFile(URL(fileURLWithPath: path), to: peer) } catch {
+				conversations[peer]?.post(.notice(Skin.shared.string(2105, "The invitation could not be sent.")))
+			}
+		}
+	}
+
+	func acceptFile(_ t: FileTransfer) { client?.acceptFile(t.id, saveTo: Self.downloadURL(for: t.name)) }
+	func declineFile(_ t: FileTransfer) { client?.declineFile(t.id) }
+	func cancelFile(_ t: FileTransfer) { client?.cancelFile(t.id) }
+
+	/// ~/Downloads/name (or the XDG download folder), "name 2" etc. if taken.
+	static func downloadURL(for name: String) -> URL {
+		let dir = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD).map { URL(fileURLWithPath: String(cString: $0)) }
+			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+		try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+		let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+		var url = dir.appendingPathComponent(name)
+		var n = 2
+		while FileManager.default.fileExists(atPath: url.path) {
+			url = dir.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+			n += 1
+		}
+		return url
 	}
 
 	func conversationClosed(_ peer: String) {
@@ -265,6 +370,8 @@ final class AppState {
 			}
 		case let .conversation(peer, ev):
 			handleConversation(peer, ev)
+		case .displayPictureChanged:
+			picturesChanged()
 		case let .signedOut(reason):
 			for w in conversations.values { w.close() }
 			conversations.removeAll()
@@ -294,12 +401,44 @@ final class AppState {
 			w.post(.nudge(name: name(of: from), outgoing: false))
 			w.shake()
 			Sounds.play("nudge")
-		case .joined:
-			break
+		case let .joined(email, _):
+			guard let w = conversations[peer] else { return }
+			let wasIn = w.participants.contains(email)
+			w.updateParticipants(participants(with: peer))
+			if !wasIn, email != peer {
+				w.post(.notice(Skin.shared.string(2032, "%1 has been added to the conversation.").replacingOccurrences(of: "%1", with: name(of: email))))
+			}
 		case let .left(email):
-			if email != peer { conversations[peer]?.post(.notice("\(name(of: email)) has left the conversation.")) }
+			guard let w = conversations[peer] else { return }
+			let wasGroup = w.participants.count > 1
+			w.updateParticipants(participants(with: peer))
+			if email != peer || wasGroup {
+				w.post(.notice(Skin.shared.string(2033, "%1 has left the conversation.").replacingOccurrences(of: "%1", with: name(of: email))))
+			}
 		case let .deliveryFailed(text, reason):
 			openConversation(peer, present: false).post(.failed(text: text, reason: reason))
+		case let .offlineMessage(_, name, text, sent):
+			let isNew = conversations[peer] == nil
+			let w = openConversation(peer, present: isNew)
+			if peer == w.peer { w.peerName = name }
+			w.refreshHeader()
+			w.post(.offline(senderName: name, text: text, sent: sent))
+			if !w.isActive {
+				Sounds.play("type")
+				notifyDesktop(title: "\(name) says:", body: text, id: "msg-\(peer)")
+			}
+		case .storedOffline:
+			if let w = conversations[peer] { tellOffline(w) }
+		case let .file(t):
+			let w = openConversation(peer, present: t.incoming && t.state == .offered && conversations[peer] == nil)
+			w.showTransfer(t)
+			if t.incoming, t.state == .offered, !w.isActive {
+				Sounds.play("type")
+				notifyDesktop(title: name(of: t.peer), body: "wants to send you \"\(t.name)\" (\(t.sizeText)).", id: "file-\(t.id)")
+			}
+		case let .wink(_, name, thumbnail):
+			let w = openConversation(peer, present: conversations[peer] == nil)
+			w.post(.wink(senderName: name, image: thumbnail))
 		}
 	}
 

@@ -1,7 +1,8 @@
 import Foundation
 
 /// High-level WLM 8.1-equivalent client: Passport SSO, NS session, ABCH
-/// contact list and a pool of switboards keyed by conversation peer.
+/// contact list, a pool of switchboards keyed by conversation peer, offline
+/// messages, and P2P (display pictures, winks, file transfer).
 @MainActor
 public final class MessengerClient {
 	public enum State: Equatable {
@@ -17,6 +18,14 @@ public final class MessengerClient {
 		case joined(email: String, displayName: String)
 		case left(email: String)
 		case deliveryFailed(text: String, reason: String)
+		/// A message left for us while we were offline.
+		case offlineMessage(from: String, displayName: String, text: String, sent: Date?)
+		/// The contact is offline; our message was stored for when they sign in.
+		case storedOffline(text: String)
+		/// A file transfer started, changed state or made progress.
+		case file(FileTransfer)
+		/// A wink; WLM's are Flash animations, so this is their preview image.
+		case wink(from: String, displayName: String, thumbnail: Data?)
 	}
 
 	public enum Event {
@@ -29,6 +38,8 @@ public final class MessengerClient {
 		case addedBy(email: String, displayName: String)
 		case conversation(peer: String, ConversationEvent)
 		case signedOut(reason: String?)
+		/// A contact's (or, for our own address, our) display picture changed or arrived.
+		case displayPictureChanged(email: String)
 	}
 
 	public let config: ServerConfig
@@ -42,6 +53,10 @@ public final class MessengerClient {
 
 	public var onEvent: ((Event) -> Void)?
 	public var log: ((String) -> Void)?
+	/// Where fetched display pictures are cached, by SHA1D (set by the app).
+	public var displayPictureDirectory: URL?
+	/// Our display picture (PNG/JPEG data), advertised in `CHG` as an msnobj.
+	public private(set) var displayPicture: Data?
 
 	private var ns: MSNPConnection?
 	private var tokens: PassportTokens?
@@ -52,9 +67,17 @@ public final class MessengerClient {
 	private var knownDisplayName = false
 	private var knownPersonalMessage = false
 	private var switchboards: [String: SwitchboardSession] = [:]
+	/// Switchboards that arrived while a group conversation with the same
+	/// inviter was open; kept so that conversation isn't closed (see `attach`).
+	private var sideSwitchboards: [SwitchboardSession] = []
 	private var openingSwitchboards: [String: Task<SwitchboardSession, Error>] = [:]
 	private var pingTask: Task<Void, Never>?
 	private var signingOut = false
+	private var p2p: P2PManager?
+	private var pictureCache: [String: Data] = [:]
+	private var oimLockKey = ""
+	private var oimRuns: [String: (runID: String, sequence: Int)] = [:]
+	private var seenOfflineMessages: Set<String> = []
 	public let machineGUID = "{\(UUID().uuidString)}"
 
 	public init(config: ServerConfig) {
@@ -80,6 +103,7 @@ public final class MessengerClient {
 			let passport = Task { try await PassportAuth(config: config).requestTokens(email: email, password: password) }
 			let conn = try await connectNotificationServer(email: email, passport: passport)
 			ns = conn
+			startP2P()
 			setState(.signingIn("Loading contacts..."))
 			try await loadContactList()
 			try await announcePresence(initialStatus)
@@ -281,8 +305,12 @@ public final class MessengerClient {
 	private func tearDown() {
 		pingTask?.cancel()
 		pingTask = nil
+		p2p?.reset()
+		p2p = nil
 		for sb in switchboards.values { sb.close() }
 		switchboards.removeAll()
+		sideSwitchboards.forEach { $0.close() }
+		sideSwitchboards.removeAll()
 		openingSwitchboards.removeAll()
 		ns?.onClose = nil
 		ns?.close()
@@ -319,7 +347,8 @@ public final class MessengerClient {
 	public func setStatus(_ presence: Presence) async throws {
 		guard let ns else { return }
 		let code = presence == .offline ? Presence.appearOffline.rawValue : presence.rawValue
-		_ = try await ns.request("CHG", [code, String(ClientIdentity.advertisedCapabilities), "0"])
+		let object = ownPictureObject?.xml.msnpURLEncoded ?? "0"
+		_ = try await ns.request("CHG", [code, String(ClientIdentity.advertisedCapabilities), object])
 		status = presence
 		onEvent?(.profileChanged)
 	}
@@ -419,18 +448,19 @@ public final class MessengerClient {
 
 	// MARK: - Conversations
 
+	/// Sends over the conversation's switchboard; to an offline contact (or one
+	/// the switchboard can't reach), stores an offline message instead, as WLM does.
 	public func sendMessage(to peer: String, text: String, format: TextFormat = TextFormat()) async {
+		if let c = contacts[peer], !c.status.isOnline, switchboards[peer]?.isClosed != false {
+			return await sendOffline(to: peer, text: text)
+		}
 		do {
 			let sb = try await switchboard(for: peer)
 			sb.send(.text(text, format: format))
+		} catch MSNPError.server(217, _) {
+			await sendOffline(to: peer, text: text)
 		} catch {
-			let reason: String
-			if case MSNPError.server(217, _) = error {
-				reason = "\(contacts[peer]?.displayName ?? peer) is offline."
-			} else {
-				reason = error.localizedDescription
-			}
-			onEvent?(.conversation(peer: peer, .deliveryFailed(text: text, reason: reason)))
+			onEvent?(.conversation(peer: peer, .deliveryFailed(text: text, reason: error.localizedDescription)))
 		}
 	}
 
@@ -454,7 +484,8 @@ public final class MessengerClient {
 	}
 
 	private func switchboard(for peer: String) async throws -> SwitchboardSession {
-		if let sb = switchboards[peer], !sb.isClosed, sb.participants[peer] != nil { return sb }
+		// A conversation keeps its switchboard while anyone is still in it.
+		if let sb = switchboards[peer], !sb.isClosed, !sb.participants.isEmpty { return sb }
 		if let pending = openingSwitchboards[peer] { return try await pending.value }
 		guard let ns else { throw MSNPError.disconnected }
 		let task = Task { () -> SwitchboardSession in
@@ -477,6 +508,17 @@ public final class MessengerClient {
 	}
 
 	private func attach(_ sb: SwitchboardSession, peer: String) {
+		if let old = switchboards[peer], old !== sb, !old.isClosed, old.participants.count > 1 {
+			// Never drop a group conversation for a second switchboard from one of
+			// its members (WLM may open one for P2P): keep both.
+			sideSwitchboards.append(sb)
+			sb.onEvent = { [weak self, weak sb] event in
+				guard let self, let sb else { return }
+				if case .closed = event { self.sideSwitchboards.removeAll { $0 === sb } }
+				self.handleSwitchboard(event, sb: sb, peer: peer)
+			}
+			return
+		}
 		if let old = switchboards[peer], old !== sb { old.close() }
 		switchboards[peer] = sb
 		sb.onEvent = { [weak self, weak sb] event in
@@ -489,6 +531,7 @@ public final class MessengerClient {
 		switch event {
 		case let .joined(email, name):
 			onEvent?(.conversation(peer: peer, .joined(email: email, displayName: name)))
+			requestDisplayPicture(of: email)
 		case let .left(email):
 			onEvent?(.conversation(peer: peer, .left(email: email)))
 		case let .message(from, name, mime):
@@ -499,7 +542,20 @@ public final class MessengerClient {
 			case "text/x-msmsgscontrol":
 				onEvent?(.conversation(peer: peer, .typing(from: from)))
 			case "text/x-msnmsgr-datacast":
-				if mime.bodyString.contains("ID: 1") { onEvent?(.conversation(peer: peer, .nudge(from: from))) }
+				let fields = Self.fields(mime.bodyString)
+				switch fields["ID"] {
+				case "1":
+					onEvent?(.conversation(peer: peer, .nudge(from: from)))
+				case "2":
+					// A wink: its msnobj, fetched from the sender like a display picture.
+					if let object = fields["Data"].flatMap(MSNObject.init), object.kind == .wink {
+						p2p?.fetch(object, from: from)
+					}
+				default:
+					break
+				}
+			case "application/x-msnmsgrp2p":
+				p2p?.handle(from: from, mime)
 			default:
 				log?("[SB] ignoring \(mime.contentType)")
 			}
@@ -514,17 +570,32 @@ public final class MessengerClient {
 		switch cmd.name {
 		case "ILN":
 			// ILN trid status email networkid friendlyname caps [msnobj]
-			if cmd.args.count >= 6 { presence(status: cmd.args[1], email: cmd.args[2], name: cmd.args[4], caps: cmd.args[5]) }
+			if cmd.args.count >= 6 {
+				presence(status: cmd.args[1], email: cmd.args[2], name: cmd.args[4], caps: cmd.args[5], object: cmd.args.count > 6 ? cmd.args[6] : nil)
+			}
 		case "NLN":
 			// NLN status email networkid friendlyname caps [msnobj]
-			if cmd.args.count >= 5 { presence(status: cmd.args[0], email: cmd.args[1], name: cmd.args[3], caps: cmd.args[4]) }
+			if cmd.args.count >= 5 {
+				presence(status: cmd.args[0], email: cmd.args[1], name: cmd.args[3], caps: cmd.args[4], object: cmd.args.count > 5 ? cmd.args[5] : nil)
+			}
 		case "FLN":
-			if let email = cmd.args.first?.lowercased() { update(email) { $0.status = .offline } }
+			if let email = cmd.args.first?.lowercased() {
+				update(email) { $0.status = .offline }
+				p2p?.peerWentOffline(email)
+			}
 		case "UBX":
 			// UBX email networkid length\r\n<Data><PSM>…
 			guard let email = cmd.args.first?.lowercased(), let payload = cmd.payload else { return }
 			let info = PersonalInfo(xml: payload)
 			update(email) { $0.personalMessage = info.personalMessage; $0.currentMedia = info.currentMedia }
+		case "MSG":
+			// MSG Hotmail Hotmail length: Mail-Data with offline messages, at sign-in and as they arrive.
+			guard let payload = cmd.payload else { return }
+			let mime = MIMEMessage(parsing: payload)
+			if mime.contentType == "text/x-msmsgsinitialmdatanotification" || mime.contentType == "text/x-msmsgsoimnotification",
+			   let mailData = Self.fields(mime.bodyString)["Mail-Data"] {
+				fetchOfflineMessages(mailData: mailData)
+			}
 		case "RNG":
 			// RNG sessid host:port CKI cookie email friendlyname U messenger.msn.com 1
 			guard cmd.args.count >= 5 else { return }
@@ -551,13 +622,17 @@ public final class MessengerClient {
 		}
 	}
 
-	private func presence(status: String, email rawEmail: String, name: String, caps: String) {
+	private func presence(status: String, email rawEmail: String, name: String, caps: String, object: String?) {
 		let email = rawEmail.lowercased()
+		let picture = object.flatMap(MSNObject.init).flatMap { $0.kind == .displayPicture ? $0 : nil }
+		let pictureChanged = contacts[email]?.displayPicture?.sha1d != picture?.sha1d
 		update(email) {
 			$0.status = Presence(rawValue: status) ?? .online
 			$0.displayName = name.msnpURLDecoded
 			$0.capabilities = UInt32(caps.split(separator: ":").first ?? "") ?? 0
+			$0.displayPicture = picture
 		}
+		if pictureChanged { onEvent?(.displayPictureChanged(email: email)) }
 	}
 
 	/// Server-pushed `ADL 0`/`RML 0` when someone adds or removes us.
@@ -590,5 +665,222 @@ public final class MessengerClient {
 				log?("[SB] failed to answer RNG from \(inviter): \(error)")
 			}
 		}
+	}
+
+	// MARK: - Group conversations
+
+	/// Invites `email` into the conversation with `peer`, making it a group
+	/// conversation (WLM's "Invite a contact to this conversation").
+	public func invite(_ email: String, into peer: String) async throws {
+		let sb = try await switchboard(for: peer)
+		try await sb.invite(email.lowercased())
+	}
+
+	/// Everyone in the conversation with `peer` apart from us.
+	public func participants(inConversationWith peer: String) -> [String] {
+		guard let sb = switchboards[peer], !sb.isClosed, !sb.participants.isEmpty else { return [peer] }
+		return sb.participants.keys.sorted()
+	}
+
+	// MARK: - Offline messages
+
+	private var offlineService: OfflineMessageService? {
+		tokens?["messenger.msn.com"].map { OfflineMessageService(config: config, ticket: $0.ticket) }
+	}
+
+	private func fetchOfflineMessages(mailData: String) {
+		guard let service = offlineService else { return }
+		Task {
+			do {
+				var waiting: [OfflineMessage]
+				if let listed = OfflineMessageService.parseMailData(mailData) {
+					waiting = listed
+				} else {
+					waiting = try await service.metadata()
+				}
+				waiting.removeAll { seenOfflineMessages.contains($0.id) }
+				var fetched: [OfflineMessage] = []
+				for meta in waiting {
+					seenOfflineMessages.insert(meta.id)
+					guard var m = try await service.message(meta.id) else { continue }
+					if m.from.isEmpty { m.from = meta.from }
+					m.displayName = m.displayName ?? meta.displayName
+					// Mail-Data's RT is UTC; Escargot labels the Date header -0800 even in summer time.
+					m.sent = meta.sent ?? m.sent
+					fetched.append(m)
+				}
+				fetched.sort { ($0.sent ?? .distantPast) < ($1.sent ?? .distantPast) }
+				for m in fetched {
+					let name = bestName(of: m.from, fallback: m.displayName)
+					onEvent?(.conversation(peer: m.from, .offlineMessage(from: m.from, displayName: name, text: m.text, sent: m.sent)))
+				}
+				try await service.delete(fetched.map(\.id))
+			} catch {
+				log?("[OIM] fetching offline messages failed: \(error)")
+			}
+		}
+	}
+
+	private func sendOffline(to peer: String, text: String) async {
+		guard let service = offlineService else {
+			onEvent?(.conversation(peer: peer, .deliveryFailed(text: text, reason: "\(contacts[peer]?.displayName ?? peer) is offline.")))
+			return
+		}
+		var run = oimRuns[peer] ?? (runID: "{\(UUID().uuidString)}", sequence: 0)
+		run.sequence += 1
+		oimRuns[peer] = run
+		do {
+			var result = try await service.store(from: email, displayName: displayName, to: peer, text: text,
+			                                      runID: run.runID, sequence: run.sequence, lockKey: oimLockKey)
+			if case let .lockKeyChallenge(challenge) = result {
+				oimLockKey = MSNPChallenge.response(to: challenge)
+				result = try await service.store(from: email, displayName: displayName, to: peer, text: text,
+				                                 runID: run.runID, sequence: run.sequence, lockKey: oimLockKey)
+			}
+			guard result == .stored else { throw MSNPError.unexpected("the offline message service kept asking for a lock key") }
+			onEvent?(.conversation(peer: peer, .storedOffline(text: text)))
+		} catch {
+			let reason = "\(contacts[peer]?.displayName ?? peer) is offline, and the message couldn't be saved for later: \(error.localizedDescription)"
+			onEvent?(.conversation(peer: peer, .deliveryFailed(text: text, reason: reason)))
+		}
+	}
+
+	// MARK: - Display pictures
+
+	private var ownPictureObject: MSNObject?
+
+	/// Sets (or, with nil, clears) our display picture; contacts fetch it from us.
+	public func setDisplayPicture(_ data: Data?) async {
+		if let old = ownPictureObject { p2p?.served[old.sha1d] = nil }
+		displayPicture = data
+		refreshOwnPicture()
+		onEvent?(.displayPictureChanged(email: email))
+		if state == .signedIn { try? await setStatus(status) }
+	}
+
+	private func refreshOwnPicture() {
+		guard let data = displayPicture, !email.isEmpty else {
+			ownPictureObject = nil
+			return
+		}
+		let object = MSNObject(creator: email, data: data, kind: .displayPicture)
+		ownPictureObject = object
+		p2p?.served[object.sha1d] = data
+	}
+
+	/// A contact's display picture, if it has been fetched (now or on an earlier
+	/// run); for offline contacts, whose msnobj we don't get, the last one seen.
+	public func displayPicture(of email: String) -> Data? {
+		if email == self.email { return displayPicture }
+		guard let object = contacts[email]?.displayPicture else {
+			return lastPictures[email].flatMap { name in displayPictureDirectory.flatMap { try? Data(contentsOf: $0.appendingPathComponent(name)) } }
+		}
+		if let hit = pictureCache[object.sha1d] { return hit }
+		guard let dir = displayPictureDirectory,
+		      let data = try? Data(contentsOf: dir.appendingPathComponent(object.cacheName)), object.matches(data) else { return nil }
+		pictureCache[object.sha1d] = data
+		return data
+	}
+
+	/// Contact → cached picture file, kept next to the pictures.
+	private lazy var lastPictures: [String: String] = {
+		guard let url = displayPictureDirectory?.appendingPathComponent("contacts.json"),
+		      let data = try? Data(contentsOf: url) else { return [:] }
+		return (try? JSONDecoder().decode([String: String].self, from: data)) ?? [:]
+	}()
+
+	private func rememberPicture(_ object: MSNObject, of email: String) {
+		guard lastPictures[email] != object.cacheName, let dir = displayPictureDirectory else { return }
+		lastPictures[email] = object.cacheName
+		try? JSONEncoder().encode(lastPictures).write(to: dir.appendingPathComponent("contacts.json"))
+	}
+
+	/// Fetches a contact's display picture over a switchboard unless we have it.
+	public func requestDisplayPicture(of email: String) {
+		log?("[DP] request \(email): online \(contacts[email]?.status.isOnline ?? false), msnobj \(contacts[email]?.displayPicture?.sha1d ?? "none")")
+		guard let p2p, let c = contacts[email], c.status.isOnline, let object = c.displayPicture else { return }
+		if displayPicture(of: email) != nil {
+			rememberPicture(object, of: email)
+			return
+		}
+		p2p.fetch(object, from: email)
+	}
+
+	private func startP2P() {
+		let p2p = P2PManager(myEmail: email)
+		p2p.log = log
+		p2p.send = { [weak self] peer, message in
+			guard let self else { throw MSNPError.disconnected }
+			// Any open conversation with them will do (a group one too: P2P-Dest
+			// addresses the message); only open a switchboard if there's none.
+			let open = (Array(self.switchboards.values) + self.sideSwitchboards)
+				.first { !$0.isClosed && $0.participants[peer] != nil }
+			let sb: SwitchboardSession
+			if let open { sb = open } else { sb = try await self.switchboard(for: peer) }
+			sb.send(message, ack: "D")
+		}
+		p2p.onObject = { [weak self] peer, object, data in self?.objectArrived(object, data, from: peer) }
+		p2p.onTransfer = { [weak self] t in self?.onEvent?(.conversation(peer: t.peer, .file(t))) }
+		self.p2p = p2p
+		refreshOwnPicture()
+	}
+
+	private func objectArrived(_ object: MSNObject, _ data: Data, from peer: String) {
+		switch object.kind {
+		case .displayPicture:
+			pictureCache[object.sha1d] = data
+			if let dir = displayPictureDirectory {
+				try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+				try? data.write(to: dir.appendingPathComponent(object.cacheName))
+				rememberPicture(object, of: peer)
+			}
+			onEvent?(.displayPictureChanged(email: peer))
+		case .wink:
+			onEvent?(.conversation(peer: peer, .wink(from: peer, displayName: bestName(of: peer), thumbnail: Wink.thumbnail(fromCabinet: data))))
+		default:
+			break
+		}
+	}
+
+	// MARK: - Files and winks
+
+	/// Offers a file to `peer`; follow it through `.file` conversation events.
+	@discardableResult
+	public func sendFile(_ url: URL, to peer: String) throws -> FileTransfer {
+		guard let p2p else { throw MSNPError.disconnected }
+		let t = try p2p.sendFile(url, to: peer)
+		onEvent?(.conversation(peer: peer, .file(t)))
+		return t
+	}
+
+	public func acceptFile(_ id: String, saveTo url: URL) { p2p?.accept(id, saveTo: url) }
+	public func declineFile(_ id: String) { p2p?.decline(id) }
+	public func cancelFile(_ id: String) { p2p?.cancel(id) }
+
+	/// Sends a wink: a cabinet with WLM's content.xml, a preview and the animation.
+	public func sendWink(_ cabinet: Data, to peer: String) async throws {
+		guard let p2p else { throw MSNPError.disconnected }
+		let object = MSNObject(creator: email, data: cabinet, kind: .wink, location: "TFR\(Int.random(in: 1000...9999)).dat")
+		p2p.served[object.sha1d] = cabinet
+		let sb = try await switchboard(for: peer)
+		sb.send(.datacast(id: 2, data: object.xml))
+	}
+
+	/// The best name we have for someone: their contact name unless that's just
+	/// their address (WLM stores that for new contacts), else a name they used.
+	public func bestName(of email: String, fallback: String? = nil) -> String {
+		if let n = contacts[email]?.displayName, n != email { return n }
+		if let n = switchboards.values.lazy.compactMap({ $0.participants[email] }).first(where: { !$0.isEmpty && $0 != email }) { return n }
+		return fallback ?? contacts[email]?.displayName ?? email
+	}
+
+	/// `Key: value` lines of a message body.
+	static func fields(_ body: String) -> [String: String] {
+		var out: [String: String] = [:]
+		for line in body.components(separatedBy: "\r\n") {
+			guard let colon = line.firstIndex(of: ":") else { continue }
+			out[String(line[..<colon]).trimmingCharacters(in: .whitespaces)] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+		}
+		return out
 	}
 }

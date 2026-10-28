@@ -267,7 +267,13 @@ private struct MeArea: View {
 
 	var body: some View {
 		HStack(alignment: .top, spacing: 0) {
-			UserTile(seed: app.myEmail, size: 48)
+			UserTile(seed: app.myEmail, size: 48, picture: app.displayPicture(of: app.myEmail))
+				.help(Skin.shared.string(2092, "Select a Display Picture"))
+				.onTapGesture { app.chooseDisplayPicture() }
+				.contextMenu {
+					Button(Skin.shared.string(2092, "Select a Display Picture") + "…") { app.chooseDisplayPicture() }
+					Button("Remove Display Picture") { app.setDisplayPicture(nil) }
+				}
 				.padding(.trailing, 5)
 			VStack(alignment: .leading, spacing: 0) {
 				StatusMenu(current: app.myStatus, pick: app.setStatus) {

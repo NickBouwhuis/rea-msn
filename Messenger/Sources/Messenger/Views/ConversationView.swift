@@ -10,14 +10,19 @@ struct ConversationView: View {
 	@EnvironmentObject var app: AppModel
 	@State private var showFormat = false
 	@State private var showEmoticons = false
+	@State private var showInvite = false
 	@State private var lastTypingSent = Date.distantPast
 	private let s = Skin.shared
 
 	private var contact: Contact? { app.contacts.first { $0.email == convo.peer } ?? app.contact(convo.peer) }
-	private var peerName: String { contact?.displayName ?? convo.peerName ?? convo.peer }
+	private var peerName: String { app.name(of: convo.peer) }
+	/// "Alice" or, in a group conversation, "Alice, Carol".
+	private var title: String {
+		convo.participants.count > 1 ? convo.participants.map { app.name(of: $0) }.joined(separator: ", ") : peerName
+	}
 
 	var body: some View {
-		WLMChrome(title: peerName, subtitle: "<\(convo.peer)>") {
+		WLMChrome(title: title, subtitle: convo.participants.count > 1 ? nil : "<\(convo.peer)>") {
 			VStack(spacing: 0) {
 				activityToolbar
 				HStack(alignment: .top, spacing: 8) {
@@ -36,14 +41,24 @@ struct ConversationView: View {
 				.padding(4)
 			}
 		}
-		.onChange(of: peerName) { _, _ in app.windows.updateTitle(convo.peer) }
+		.onChange(of: title) { _, _ in app.windows.updateTitle(convo.peer) }
 	}
 
 	/// Invite / Share Files / Video / Call / Activities / Games / Block.
 	private var activityToolbar: some View {
 		HStack(spacing: 2) {
-			ToolbarIconButton(id: 1441, symbol: "person.badge.plus", help: s.string(60032, "Invite")) {}
-			ToolbarIconButton(id: 1444, symbol: "folder", help: "Share Files") {}
+			ToolbarIconButton(id: 1441, symbol: "person.badge.plus", help: s.string(60032, "Invite").replacingOccurrences(of: "&", with: "")) {
+				showInvite.toggle()
+			}
+			.popover(isPresented: $showInvite) {
+				InvitePicker(candidates: inviteCandidates) { email in
+					showInvite = false
+					app.invite(email, into: convo.peer)
+				}
+			}
+			ToolbarIconButton(id: 1444, symbol: "folder", help: s.string(60033, "Share files").replacingOccurrences(of: "&", with: "")) {
+				shareFiles()
+			}
 			ToolbarIconButton(id: 1445, symbol: "video", help: s.string(46584, "Video")) {}
 			ToolbarIconButton(id: 1447, symbol: "phone", help: s.string(46586, "Call")) {}
 			ToolbarIconButton(id: 1442, symbol: "film", help: s.string(61345, "Activities")) {}
@@ -65,7 +80,7 @@ struct ConversationView: View {
 							.font(WLMFont.regular()).foregroundStyle(Color(rgb: 0x777777))
 					}
 					ForEach(convo.lines) { line in
-						LineView(line: line).id(line.id)
+						LineView(line: line).environmentObject(convo).id(line.id)
 					}
 				}
 				.padding(6)
@@ -146,12 +161,28 @@ struct ConversationView: View {
 	/// youusertile (top) and meusertile (bottom), 96pt with the tile border.
 	private var pictures: some View {
 		VStack {
-			UserTile(seed: convo.peer)
+			if convo.participants.count <= 1 {
+				UserTile(seed: convo.peer, picture: app.displayPicture(of: convo.peer))
+			}
 			Spacer()
-			UserTile(seed: app.myEmail)
+			UserTile(seed: app.myEmail, picture: app.displayPicture(of: app.myEmail))
 				.padding(.bottom, 4)
 		}
 		.frame(width: 104)
+	}
+
+	/// Online contacts not yet in the conversation.
+	private var inviteCandidates: [Contact] {
+		app.contacts.filter { $0.status.isOnline && !convo.participants.contains($0.email) }
+	}
+
+	private func shareFiles() {
+		let panel = NSOpenPanel()
+		panel.title = s.string(2110, "Send a File to %1").replacingOccurrences(of: "%1", with: title)
+		panel.allowsMultipleSelection = true
+		panel.canChooseDirectories = false
+		guard panel.runModal() == .OK else { return }
+		app.sendFiles(panel.urls, to: convo.peer)
 	}
 
 	private func send() {
@@ -172,6 +203,7 @@ struct ConversationView: View {
 private struct LineView: View {
 	let line: ChatLine
 	@EnvironmentObject var app: AppModel
+	@EnvironmentObject var convo: ConversationModel
 
 	var body: some View {
 		switch line.kind {
@@ -202,7 +234,36 @@ private struct LineView: View {
 				Text(text).font(.system(size: 12)).foregroundStyle(WLM.muted).padding(.leading, 12)
 				Text(reason).font(.system(size: 10)).foregroundStyle(WLM.muted).padding(.leading, 12)
 			}
+		case let .offline(_, senderName, text, sent):
+			VStack(alignment: .leading, spacing: 1) {
+				(Emoticons.text(senderName, enabled: app.settings.convertEmoticons) + Text(saysWhen(sent)))
+					.font(WLMFont.regular())
+					.foregroundStyle(Color(rgb: 0x777777))
+				AnimatedEmoticonText(text: text, enabled: app.settings.convertEmoticons)
+					.font(.system(size: 13))
+					.padding(.leading, 12)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+		case let .file(id):
+			if let t = convo.transfers[id] { TransferRow(transfer: t) }
+		case let .wink(senderName, image):
+			VStack(alignment: .leading, spacing: 2) {
+				Text(Skin.shared.string(2345, "%1 winks:").replacingOccurrences(of: "%1", with: senderName))
+					.font(WLMFont.regular()).foregroundStyle(Color(rgb: 0x777777))
+				if let image, let ns = NSImage(data: image) {
+					Image(nsImage: ns).interpolation(.high).resizable().aspectRatio(contentMode: .fit)
+						.frame(maxWidth: 120, maxHeight: 120, alignment: .leading)
+						.padding(.leading, 12)
+				}
+			}
 		}
+	}
+
+	/// "%1 says (%3):" with the time it was sent, for offline messages.
+	private func saysWhen(_ sent: Date?) -> String {
+		let template = Skin.shared.string(2042, "%1 says (%3):")
+		let when = sent.map { "\($0.formatted(date: .numeric, time: .shortened))" } ?? "offline"
+		return String(template.replacingOccurrences(of: "%3", with: when).drop { $0 != " " })
 	}
 
 	private func font(_ f: TextFormat) -> Font {
@@ -333,5 +394,72 @@ private struct MessageInput: NSViewRepresentable {
 			}
 			return false
 		}
+	}
+}
+
+/// A file transfer in the transcript: WLM's invitation text, progress, and its
+/// Accept/Decline/Cancel (or Open) links.
+private struct TransferRow: View {
+	let transfer: FileTransfer
+	@EnvironmentObject var app: AppModel
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 3) {
+			Text(transfer.text(peerName: app.name(of: transfer.peer)) { Skin.shared.string($0, $1) })
+				.font(WLMFont.regular())
+				.foregroundStyle(R.text)
+				.fixedSize(horizontal: false, vertical: true)
+			if transfer.state == .transferring {
+				ProgressView(value: transfer.progress).frame(maxWidth: 220)
+			}
+			HStack(spacing: 10) {
+				switch transfer.state {
+				case .offered:
+					link(Skin.shared.string(2052, "Accept")) { app.acceptFile(transfer) }
+					link(Skin.shared.string(2053, "Decline")) { app.declineFile(transfer) }
+				case .waiting, .transferring:
+					link(Skin.shared.string(2054, "Cancel")) { app.cancelFile(transfer) }
+				case .completed where transfer.incoming:
+					link("Open") { app.openFile(transfer) }
+					link("Show in Finder") { app.revealFile(transfer) }
+				default:
+					EmptyView()
+				}
+			}
+		}
+		.padding(.vertical, 2)
+	}
+
+	private func link(_ title: String, _ action: @escaping () -> Void) -> some View {
+		Button(title, action: action).buttonStyle(.link).font(WLMFont.regular())
+	}
+}
+
+/// The Invite button's list: online contacts who aren't in the conversation yet.
+private struct InvitePicker: View {
+	let candidates: [Contact]
+	let pick: (String) -> Void
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 2) {
+			Text("Invite someone to this conversation:").font(WLMFont.bold()).padding(.bottom, 4)
+			if candidates.isEmpty {
+				Text("None of your other contacts are online.").font(WLMFont.regular()).foregroundStyle(WLM.muted)
+			}
+			ForEach(candidates) { c in
+				Button { pick(c.email) } label: {
+					HStack(spacing: 6) {
+						StatusIcon(presence: c.status)
+						Text(c.displayName).font(WLMFont.regular()).lineLimit(1)
+					}
+					.frame(maxWidth: .infinity, alignment: .leading)
+					.contentShape(Rectangle())
+				}
+				.buttonStyle(.plain)
+				.padding(.vertical, 2)
+			}
+		}
+		.padding(10)
+		.frame(minWidth: 220, alignment: .leading)
 	}
 }

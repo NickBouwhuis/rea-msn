@@ -104,11 +104,16 @@ public struct MIMEMessage {
 		], body: Data("\r\n".utf8))
 	}
 
-	public static func nudge() -> MIMEMessage {
-		MIMEMessage(headers: [
+	public static func nudge() -> MIMEMessage { datacast(id: 1) }
+
+	/// `text/x-msnmsgr-datacast`: ID 1 is a nudge, ID 2 a wink (its msnobj in `Data:`).
+	public static func datacast(id: Int, data: String? = nil) -> MIMEMessage {
+		var body = "ID: \(id)\r\n"
+		if let data { body += "Data: \(data)\r\n" }
+		return MIMEMessage(headers: [
 			("MIME-Version", "1.0"),
 			("Content-Type", "text/x-msnmsgr-datacast"),
-		], body: Data("ID: 1\r\n\r\n".utf8))
+		], body: Data((body + "\r\n").utf8))
 	}
 }
 

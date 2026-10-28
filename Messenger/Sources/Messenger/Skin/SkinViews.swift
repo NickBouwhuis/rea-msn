@@ -282,10 +282,15 @@ struct StatusIcon: View {
 struct UserTile: View {
 	let seed: String
 	var size: CGFloat = 96
+	/// The person's display picture; WLM's default tile when there's none.
+	var picture: NSImage? = nil
 
 	var body: some View {
 		Group {
-			if let img = Skin.shared.image(size > 64 ? R.defaultTileLarge : R.defaultTileSmall) {
+			if let picture {
+				Image(nsImage: picture).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+					.frame(width: size, height: size).clipped()
+			} else if let img = Skin.shared.image(size > 64 ? R.defaultTileLarge : R.defaultTileSmall) {
 				Image(nsImage: img).resizable().interpolation(.high).frame(width: size, height: size)
 			} else {
 				DisplayPicture(seed: seed, size: size - 6)
