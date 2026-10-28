@@ -26,7 +26,9 @@ env:
 jobs:
   macos:
     name: macOS DMG
-    runs-on: macos-latest
+    # Intel image: GitHub's arm64 macOS runners are often capacity-constrained,
+    # and the universal build doesn't care which Mac it runs on.
+    runs-on: macos-15-intel
     env:
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
       NOTARY_KEY_B64: ${{ secrets.NOTARY_KEY }}
@@ -88,6 +90,9 @@ jobs:
           - { ubuntu: "26.04", arch: arm64, runner: ubuntu-24.04-arm, container: "ubuntu:26.04" }
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash  # containers default to sh; swiftly's env.sh needs bash
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
