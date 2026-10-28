@@ -1,6 +1,7 @@
 import AppKit
 import MSNKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// convframe (msgsres.dll UIFILE 920 / convframess): WLM frame titled with the
 /// contact, a toolbar of activities, the history pane, the input area
@@ -122,14 +123,18 @@ struct ConversationView: View {
 			.background(LinearGradient(colors: [.white, Color(rgb: 0xE9F1F5)], startPoint: .top, endPoint: .bottom))
 
 			HStack(alignment: .top, spacing: 6) {
-				MessageInput(text: $convo.draft, format: convo.format, onSend: send, onEdit: typed)
-					.frame(minHeight: 64, maxHeight: 100)
+				VStack(spacing: 0) {
+					if let picture = convo.pendingPicture { pendingPicture(picture) }
+					MessageInput(text: $convo.draft, format: convo.format, acceptsPictures: app.supportsPictures,
+					             onSend: send, onEdit: typed, onPicture: { convo.pendingPicture = $0 })
+				}
+					.frame(minHeight: 64, maxHeight: convo.pendingPicture == nil ? 100 : 160)
 					.background(Color.white)
 					.overlay(Rectangle().stroke(R.listBorder, lineWidth: 1))
 				VStack(spacing: 4) {
 					Button(s.string(60014, "Send"), action: send)
 						.buttonStyle(WLMPushButtonStyle(isDefault: true))
-						.disabled(convo.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+						.disabled(convo.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && convo.pendingPicture == nil)
 					Button(s.string(39703, "Search")) {
 						let q = convo.draft.trimmingCharacters(in: .whitespacesAndNewlines)
 						if !q.isEmpty, let url = URL(string: "https://duckduckgo.com/?q=\(q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
@@ -154,7 +159,26 @@ struct ConversationView: View {
 		.frame(width: 104)
 	}
 
+	/// A pasted picture above the text: Send sends it (and any text).
+	private func pendingPicture(_ picture: PendingPicture) -> some View {
+		HStack(spacing: 8) {
+			if let image = NSImage(data: picture.data) {
+				Image(nsImage: image).resizable().aspectRatio(contentMode: .fit).frame(maxWidth: 80, maxHeight: 52)
+			}
+			Text("Send \(picture.filename)?").font(WLMFont.regular()).foregroundStyle(R.text).lineLimit(1)
+			Spacer()
+			Button { convo.pendingPicture = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+				.buttonStyle(.plain).help("Don't send this picture")
+		}
+		.padding(6)
+		.background(Color(rgb: 0xEAF1F6))
+	}
+
 	private func send() {
+		if let picture = convo.pendingPicture {
+			convo.pendingPicture = nil
+			app.sendPicture(picture, to: convo.peer)
+		}
 		let text = convo.draft
 		convo.draft = ""
 		app.send(text, to: convo.peer)
@@ -174,7 +198,28 @@ private struct LineView: View {
 	@EnvironmentObject var app: AppModel
 
 	var body: some View {
+		content.opacity(line.isHistory ? 0.55 : 1)
+	}
+
+	@ViewBuilder
+	private var content: some View {
 		switch line.kind {
+		case let .picture(_, senderName, data, _):
+			VStack(alignment: .leading, spacing: 1) {
+				(Emoticons.text(senderName, enabled: app.settings.convertEmoticons) + Text(" says:"))
+					.font(WLMFont.regular())
+					.foregroundStyle(Color(rgb: 0x777777))
+				if let image = NSImage(data: data) {
+					Image(nsImage: image)
+						.resizable()
+						.aspectRatio(contentMode: .fit)
+						.frame(maxWidth: min(260, image.size.width), maxHeight: 260, alignment: .leading)
+						.overlay(Rectangle().stroke(R.listBorder, lineWidth: 1))
+						.padding(.leading, 12)
+						.onTapGesture(count: 2) { Self.preview(data) }
+						.help("Double-click to open")
+				}
+			}
 		case let .message(_, senderName, text, format, _):
 			VStack(alignment: .leading, spacing: 1) {
 				(Emoticons.text(senderName, enabled: app.settings.convertEmoticons) + Text(" says:"))
@@ -203,6 +248,21 @@ private struct LineView: View {
 				Text(reason).font(.system(size: 10)).foregroundStyle(WLM.muted).padding(.leading, 12)
 			}
 		}
+	}
+
+	/// Opens a picture in Preview (or whatever opens images).
+	private static func preview(_ data: Data) {
+		let url = FileManager.default.temporaryDirectory.appendingPathComponent("Messenger-\(UUID().uuidString)")
+			.appendingPathExtension(fileExtension(data))
+		if (try? data.write(to: url)) != nil { NSWorkspace.shared.open(url) }
+	}
+
+	private static func fileExtension(_ data: Data) -> String {
+		let b = [UInt8](data.prefix(4))
+		if b.starts(with: [0xFF, 0xD8]) { return "jpg" }
+		if b.starts(with: [0x47, 0x49, 0x46]) { return "gif" }
+		if b.starts(with: [0x52, 0x49, 0x46, 0x46]) { return "webp" }
+		return "png"
 	}
 
 	private func font(_ f: TextFormat) -> Font {
@@ -275,17 +335,27 @@ private struct EmoticonPicker: View {
 }
 
 /// NSTextView wrapper: Return sends, Shift/Option-Return inserts a newline.
+/// Pasted or dropped images (or image files) become a picture to send.
 private struct MessageInput: NSViewRepresentable {
 	@Binding var text: String
 	let format: TextFormat
+	let acceptsPictures: Bool
 	let onSend: () -> Void
 	let onEdit: () -> Void
+	let onPicture: (PendingPicture) -> Void
 
 	func makeNSView(context: Context) -> NSScrollView {
-		let scroll = NSTextView.scrollableTextView()
+		let scroll = NSScrollView()
 		scroll.drawsBackground = false
 		scroll.hasVerticalScroller = true
-		let tv = scroll.documentView as! NSTextView
+		let tv = PictureTextView()
+		tv.minSize = NSSize(width: 0, height: 0)
+		tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+		tv.isVerticallyResizable = true
+		tv.isHorizontallyResizable = false
+		tv.autoresizingMask = [.width]
+		tv.textContainer?.widthTracksTextView = true
+		scroll.documentView = tv
 		tv.delegate = context.coordinator
 		tv.isRichText = false
 		tv.allowsUndo = true
@@ -299,7 +369,8 @@ private struct MessageInput: NSViewRepresentable {
 
 	func updateNSView(_ scroll: NSScrollView, context: Context) {
 		context.coordinator.parent = self
-		guard let tv = scroll.documentView as? NSTextView else { return }
+		guard let tv = scroll.documentView as? PictureTextView else { return }
+		tv.onPicture = acceptsPictures ? onPicture : nil
 		if tv.string != text { tv.string = text }
 		var font = NSFont(name: format.fontName, size: 13) ?? .systemFont(ofSize: 13)
 		if format.bold { font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
@@ -333,5 +404,51 @@ private struct MessageInput: NSViewRepresentable {
 			}
 			return false
 		}
+	}
+}
+
+/// The input's text view: with a picture handler, Paste and drops of images
+/// (data, or image files from Finder) go to it instead of into the text.
+private final class PictureTextView: NSTextView {
+	var onPicture: ((PendingPicture) -> Void)?
+
+	override func paste(_ sender: Any?) {
+		if let onPicture, let picture = Self.picture(from: .general) {
+			onPicture(picture)
+		} else {
+			super.paste(sender)
+		}
+	}
+
+	override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+		if let onPicture, let picture = Self.picture(from: sender.draggingPasteboard) {
+			onPicture(picture)
+			return true
+		}
+		return super.performDragOperation(sender)
+	}
+
+	static func picture(from pasteboard: NSPasteboard) -> PendingPicture? {
+		if let url = (pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])?.first {
+			guard let type = UTType(filenameExtension: url.pathExtension), type.conforms(to: .image),
+			      let data = try? Data(contentsOf: url) else { return nil }
+			return sendable(data, filename: url.lastPathComponent, type: type)
+		}
+		if let png = pasteboard.data(forType: .png) { return PendingPicture(data: png, filename: "Picture.png") }
+		if NSImage.canInit(with: pasteboard), let image = NSImage(pasteboard: pasteboard),
+		   let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+			return PendingPicture(data: png, filename: "Picture.png")
+		}
+		return nil
+	}
+
+	/// PNG, JPEG, GIF and WebP go as they are; others (HEIC, TIFF...) as JPEG,
+	/// which every Matrix app can show.
+	private static func sendable(_ data: Data, filename: String, type: UTType) -> PendingPicture? {
+		if [UTType.png, .jpeg, .gif, .webP].contains(where: { type.conforms(to: $0) }) {
+			return PendingPicture(data: data, filename: filename)
+		}
+		guard let rep = NSBitmapImageRep(data: data), let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else { return nil }
+		return PendingPicture(data: jpeg, filename: (filename as NSString).deletingPathExtension + ".jpg")
 	}
 }

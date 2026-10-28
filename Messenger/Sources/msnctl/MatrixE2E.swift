@@ -15,6 +15,7 @@ extension CLI {
 		/// "B<-@alice:localhost: text": the raw text (inbox holds debug descriptions, which escape quotes).
 		var texts: [String] = []
 		var formats: [String: TextFormat] = [:]
+		var pictures: [String: Data] = [:]
 		var addedPrompts: [String] = []
 		for (client, tag) in [(a, "A"), (b, "B")] {
 			client.onEvent = { event in
@@ -25,6 +26,7 @@ extension CLI {
 						texts.append("\(tag)<-\(peer): \(text)")
 						formats[text] = format
 					}
+					if case let .picture(_, _, data, filename) = kind { pictures["\(tag):\(filename)"] = data }
 				case let .addedBy(email, _):
 					addedPrompts.append("\(tag):\(email)")
 				default:
@@ -121,6 +123,14 @@ extension CLI {
 			try await a.sendNudge(to: idB)
 			try await waitFor("B gets nudge") { received(by: "B", from: idA, "nudge") }
 		}
+		if a.supportsPictures {
+			try await step("picture (m.image, encrypted file)") {
+				// A 1×1 PNG.
+				let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+				await a.sendPicture(to: idB, data: png, filename: "pixel-\(run).png")
+				try await waitFor("B gets the picture") { pictures["B:pixel-\(run).png"] == png }
+			}
+		}
 		try await step("B signs out and A sees Offline") {
 			b.signOut()
 			try await waitFor("B offline") { a.contacts[idB]?.status == .offline }
@@ -146,18 +156,24 @@ extension CLI {
 			a2.signOut()
 		}
 		#if os(macOS)
-		try await step("a remembered session comes back without the password, as the same device") {
+		try await step("a remembered session comes back without the password, as the same device, with history") {
 			let store = MemoryMatrixSessionStore()
 			let dir = FileManager.default.temporaryDirectory.appendingPathComponent("msnctl-\(UUID().uuidString)", isDirectory: true)
 			let first = MatrixClient(homeserver: homeserver, store: store, directory: dir)
 			try await first.signIn(email: idA, password: password)
 			let device = first.deviceID
+			await first.sendMessage(to: idB, text: "for the history \(run)")
+			try await Task.sleep(nanoseconds: 11_000_000_000)  // history is what's older than sign-in (minus 10 s)
 			first.signOut()  // "Remember me": keeps the session
 			let again = MatrixClient(homeserver: homeserver, store: store, directory: dir)
 			again.keepsSessionOnSignOut = false
 			try await again.signIn(email: idA, password: "")
 			guard again.deviceID == device else { throw MSNPError.unexpected("new device \(again.deviceID), not \(device)") }
 			guard again.contacts[idB]?.isForward == true else { throw MSNPError.unexpected("B missing after restore") }
+			let history = await again.recentMessages(with: idB, limit: 30)
+			guard history.contains(where: { $0.outgoing && $0.text == "for the history \(run)" }) else {
+				throw MSNPError.unexpected("not in history: \(history.suffix(5).map(\.text))")
+			}
 			again.signOut()  // and this time log it out
 		}
 		#endif

@@ -17,6 +17,8 @@ public final class MessengerClient {
 		case joined(email: String, displayName: String)
 		case left(email: String)
 		case deliveryFailed(text: String, reason: String)
+		/// An image (encoded file data). MSNP would need P2P for this; MatrixKit sends m.image.
+		case picture(from: String, displayName: String, data: Data, filename: String)
 	}
 
 	public enum Event {

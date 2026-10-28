@@ -182,6 +182,12 @@ final class ConversationWindow {
 		case let .failed(text, reason):
 			insert("<span foreground=\"#CC0000\">The following message could not be delivered to all recipients:</span>\n", markup: true)
 			insert("    \(text)\n    \(reason)\n", markup: false, muted: true)
+		case let .picture(sender, data, outgoing):
+			insertEmoticonText("\(sender) says:", style: "foreground=\"#777777\"")
+			insert("\n    ", markup: false)
+			insertPicture(data)
+			insert("\n", markup: false)
+			if !outgoing { setText(status, "Last message received at \(Self.time.string(from: Date())).") }
 		}
 		scrollToEnd()
 	}
@@ -202,6 +208,23 @@ final class ConversationWindow {
 		} else {
 			gtk_text_buffer_insert(buffer, &end, s, -1)
 		}
+	}
+
+	/// A picture in the transcript, at most 260 px on its longer side.
+	private func insertPicture(_ data: Data) {
+		let bytes = data.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }
+		defer { g_bytes_unref(bytes) }
+		guard let texture = gdk_texture_new_from_bytes(bytes, nil) else { return insert("[Picture]", markup: false, muted: true) }
+		defer { g_object_unref(UnsafeMutableRawPointer(texture)) }
+		let w = Double(gdk_texture_get_width(texture)), h = Double(gdk_texture_get_height(texture))
+		let scale = min(1, 260 / max(w, h, 1))
+		var end = GtkTextIter()
+		gtk_text_buffer_get_end_iter(buffer, &end)
+		let anchor = gtk_text_buffer_create_child_anchor(buffer, &end)
+		let pic = raw(gtk_picture_new_for_paintable(texture))
+		gtk_picture_set_can_shrink(c(pic), 1)
+		gtk_widget_set_size_request(c(pic), Int32(w * scale), Int32(h * scale))
+		gtk_text_view_add_child_at_anchor(c(history), c(pic), anchor)
 	}
 
 	/// Inserts text with WLM emoticons as inline images: stills as paintables,

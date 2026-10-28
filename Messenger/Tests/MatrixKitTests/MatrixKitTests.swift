@@ -63,6 +63,14 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertEqual(MatrixMessage.format(of: content), format)
 	}
 
+	func testImageMimeType() {
+		XCTAssertEqual(MatrixMessage.imageMimeType(Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])), "image/png")
+		XCTAssertEqual(MatrixMessage.imageMimeType(Data([0xFF, 0xD8, 0xFF, 0xE0])), "image/jpeg")
+		XCTAssertEqual(MatrixMessage.imageMimeType(Data("GIF89a".utf8)), "image/gif")
+		XCTAssertEqual(MatrixMessage.imageMimeType(Data("RIFF\0\0\0\0WEBP".utf8)), "image/webp")
+		XCTAssertEqual(MatrixMessage.imageMimeType(Data("hello".utf8)), "application/octet-stream")
+	}
+
 	func testNudge() {
 		let nudge = MatrixMessage.nudge()
 		XCTAssertTrue(MatrixMessage.isNudge(nudge))

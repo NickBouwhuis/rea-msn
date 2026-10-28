@@ -60,6 +60,7 @@ struct ChatLine {
 		case nudge(name: String, outgoing: Bool)
 		case notice(String)
 		case failed(text: String, reason: String)
+		case picture(senderName: String, data: Data, outgoing: Bool)
 	}
 	let kind: Kind
 	let date = Date()
@@ -321,6 +322,15 @@ final class AppState {
 			if email != peer { conversations[peer]?.post(.notice("\(name(of: email)) has left the conversation.")) }
 		case let .deliveryFailed(text, reason):
 			openConversation(peer, present: false).post(.failed(text: text, reason: reason))
+		case let .picture(from, name, data, _):
+			let isNew = conversations[peer] == nil
+			let w = openConversation(peer, present: isNew)
+			if from == peer { w.peerName = name }
+			w.post(.picture(senderName: name, data: data, outgoing: false))
+			if !w.isActive {
+				Sounds.play("type")
+				notifyDesktop(title: "\(name) sent a picture", body: "", id: "msg-\(peer)")
+			}
 		}
 	}
 

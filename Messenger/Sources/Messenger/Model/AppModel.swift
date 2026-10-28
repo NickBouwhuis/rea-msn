@@ -225,7 +225,37 @@ final class AppModel: ObservableObject {
 		if let c = conversations[peer] { return c }
 		let c = ConversationModel(peer: peer)
 		conversations[peer] = c
+		loadHistory(c)
 		return c
+	}
+
+	/// The last messages from before this sign-in (Matrix keeps history; MSNP doesn't).
+	private func loadHistory(_ convo: ConversationModel) {
+		guard let client else { return }
+		Task {
+			let history = await client.recentMessages(with: convo.peer, limit: 30)
+			guard !history.isEmpty, conversations[convo.peer] === convo, !convo.historyLoaded else { return }
+			convo.prependHistory(history.map { m in
+				let kind: ChatLine.Kind = m.picture.map { .picture(sender: m.sender, senderName: m.senderName, data: $0, outgoing: m.outgoing) }
+					?? .message(sender: m.sender, senderName: m.senderName, text: m.text, format: m.format, outgoing: m.outgoing)
+				return ChatLine(kind: kind, date: m.date, isHistory: true)
+			})
+		}
+	}
+
+	private func reloadHistory(_ convo: ConversationModel) {
+		convo.dropHistory()
+		loadHistory(convo)
+	}
+
+	/// Whether the current service can send pasted pictures.
+	var supportsPictures: Bool { client?.supportsPictures ?? false }
+
+	func sendPicture(_ picture: PendingPicture, to peer: String) {
+		guard let client else { return }
+		conversation(with: peer).append(.picture(sender: myEmail, senderName: myName, data: picture.data, outgoing: true))
+		sounds.play(.outgoing)
+		Task { await client.sendPicture(to: peer, data: picture.data, filename: picture.filename) }
 	}
 
 	func openConversation(_ peer: String, activate: Bool = true) {
@@ -266,9 +296,18 @@ final class AppModel: ObservableObject {
 	private func handleVerification(_ event: MatrixClient.VerificationEvent) {
 		switch event {
 		case let .state(verified):
+			let wasUnverified = sessionUnverified
 			sessionUnverified = !verified
 			if verified {
 				if verification != nil { verification = .done }
+				// Verified now: keys for older messages come from your other sessions
+				// and key backup, so show the history again once they've had a moment.
+				if wasUnverified {
+					Task {
+						try? await Task.sleep(nanoseconds: 5_000_000_000)
+						for convo in conversations.values { reloadHistory(convo) }
+					}
+				}
 			} else if !promptedVerification {
 				promptedVerification = true
 				verification = .prompt
@@ -414,6 +453,19 @@ final class AppModel: ObservableObject {
 				NSApp.requestUserAttention(.informationalRequest)
 				if settings.showToasts {
 					toasts.show(title: "\(name) says:", body: text, peer: peer) { [weak self] in
+						self?.openConversation(peer)
+					}
+				}
+			}
+		case let .picture(from, name, data, _):
+			let isNew = !windows.isOpen(peer)
+			convo.append(.picture(sender: from, senderName: name, data: data, outgoing: false))
+			openConversation(peer, activate: false)
+			if !windows.isKey(peer) {
+				sounds.play(isNew ? .newConversation : .incoming)
+				NSApp.requestUserAttention(.informationalRequest)
+				if settings.showToasts {
+					toasts.show(title: "\(name) sent a picture", body: "", peer: peer) { [weak self] in
 						self?.openConversation(peer)
 					}
 				}

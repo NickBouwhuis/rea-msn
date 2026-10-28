@@ -81,6 +81,16 @@ public enum MatrixMessage {
 		return lines.joined(separator: "\n")
 	}
 
+	/// The MIME type of image data, from its first bytes.
+	public static func imageMimeType(_ data: Data) -> String {
+		let b = [UInt8](data.prefix(12))
+		if b.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+		if b.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+		if b.starts(with: [0x47, 0x49, 0x46, 0x38]) { return "image/gif" }
+		if b.count == 12, b[0..<4].elementsEqual([0x52, 0x49, 0x46, 0x46]), b[8..<12].elementsEqual([0x57, 0x45, 0x42, 0x50]) { return "image/webp" }
+		return "application/octet-stream"
+	}
+
 	public static let encryptedNotice = "This message is encrypted, and this version of Messenger can't read it yet."
 	public static let undecryptableNotice = "This message couldn't be decrypted. Verifying this session (Actions ▸ Verify This Session) lets your other sessions share their keys."
 	public static var noticeFormat: TextFormat {

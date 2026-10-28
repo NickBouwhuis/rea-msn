@@ -1,5 +1,6 @@
 #if canImport(MatrixRustSDK)
 import Foundation
+import ImageIO
 import MatrixRustSDK
 import MSNKit
 
@@ -69,6 +70,8 @@ public final class MatrixClient: IMService {
 	private var handles: [TaskHandle] = []
 	private var roomHandles: [String: [TaskHandle]] = [:]
 	private var timelines: [String: Timeline] = [:]
+	/// Each followed room's timeline items, kept by applying its diffs (for history).
+	private var roomItems: [String: [TimelineItem]] = [:]
 	/// Event ID → reported as a message (true) or as undecryptable so far (false).
 	private var delivered: [String: Bool] = [:]
 	private var tasks: [Task<Void, Never>] = []
@@ -334,6 +337,7 @@ public final class MatrixClient: IMService {
 		for hs in roomHandles.values { for h in hs { h.cancel() } }
 		roomHandles = [:]
 		timelines = [:]
+		roomItems = [:]
 		for t in tasks { t.cancel() }
 		tasks = []
 		verification?.setDelegate(delegate: nil)
@@ -391,12 +395,12 @@ public final class MatrixClient: IMService {
 				self.rebuildContacts(emit: true)
 			}
 		}))
-		if let handle = try? client.subscribeToOwnProfile(listener: ProfileWatcher { [weak self] profile in
-			Task { @MainActor in self?.ownProfileChanged(profile) }
-		}) { handles.append(handle) }
 		// Presence isn't in the SDK's sync; ask for it, and catch room changes
-		// that come only through account data (m.direct) on the way.
+		// that come only through account data (m.direct) on the way. Your own
+		// name and picture too, every minute or so: the SDK's profile updates
+		// need sliding sync.
 		tasks.append(Task { [weak self] in
+			var round = 0
 			while !Task.isCancelled {
 				// Every 10 s, slower with long lists (about 3 requests a second at most).
 				let contacts = await MainActor.run { self?.contacts.count ?? 0 }
@@ -404,6 +408,8 @@ public final class MatrixClient: IMService {
 				guard let self else { return }
 				await self.pollPresence()
 				await self.refreshRooms(nil, emit: true)
+				round += 1
+				if round % 6 == 0 { await self.refreshOwnProfile() }
 			}
 		})
 		// m.typing only says when someone starts or stops; WLM's "is typing"
@@ -544,9 +550,17 @@ public final class MatrixClient: IMService {
 		for mxc in wanted where pictures[mxc] == nil {
 			pictures[mxc] = Data()
 			tasks.append(Task {
-				guard let source = try? MediaSource.fromUrl(url: mxc),
-				      let data = try? await client.getMediaThumbnail(mediaSource: source, width: 96, height: 96),
-				      !data.isEmpty, self.client != nil else { return }
+				guard let source = try? MediaSource.fromUrl(url: mxc) else { return }
+				var data: Data
+				do {
+					data = try await client.getMediaThumbnail(mediaSource: source, width: 96, height: 96)
+				} catch {
+					// Some servers don't make thumbnails of every image; take the original.
+					self.log?("[matrix] no thumbnail for \(mxc) (\(error)); downloading it")
+					guard let full = try? await client.getMediaContent(mediaSource: source) else { return }
+					data = full
+				}
+				guard !data.isEmpty, self.client != nil else { return }
 				self.pictures[mxc] = data
 				self.rebuildContacts(emit: true)
 				if mxc == self.myAvatarURL { self.onEvent?(.profileChanged) }
@@ -565,9 +579,15 @@ public final class MatrixClient: IMService {
 		}
 	}
 
-	private func ownProfileChanged(_ profile: UserProfile) {
-		if let name = profile.displayName, !name.isEmpty { displayName = name }
-		myAvatarURL = profile.avatarUrl
+	/// Picks up name and picture changes made in other apps.
+	private func refreshOwnProfile() async {
+		guard let client else { return }
+		let avatar: String?
+		do { avatar = try await client.avatarUrl() } catch { return }
+		let name = (try? await client.displayName()) ?? displayName
+		guard name != displayName || avatar != myAvatarURL else { return }
+		displayName = name
+		myAvatarURL = avatar
 		rebuildContacts(emit: true)
 		onEvent?(.profileChanged)
 	}
@@ -620,8 +640,8 @@ public final class MatrixClient: IMService {
 					return
 				}
 				let handle = await timeline.addListener(listener: TimelineWatcher { [weak self] diffs in
-					let items = diffs.flatMap(\.items).compactMap { $0.asEvent() }
-					Task { @MainActor in self?.timelineItems(items, room: id) }
+					// The main queue keeps the diffs in order, which applying them needs.
+					DispatchQueue.main.async { MainActor.assumeIsolated { self?.timelineChanged(diffs, room: id) } }
 				})
 				guard let self, self.roomHandles[id] != nil else { return handle.cancel() }
 				self.roomHandles[id]?.append(handle)
@@ -631,10 +651,17 @@ public final class MatrixClient: IMService {
 		}
 	}
 
+	private func timelineChanged(_ diffs: [TimelineDiff], room id: String) {
+		var items = roomItems[id] ?? []
+		for diff in diffs { diff.apply(to: &items) }
+		roomItems[id] = items
+		incoming(diffs.flatMap(\.items).compactMap { $0.asEvent() }, room: id)
+	}
+
 	/// New or changed timeline items: each incoming message is reported once,
 	/// and one that couldn't be decrypted gets a notice, then the message
 	/// itself if it's decrypted later.
-	private func timelineItems(_ items: [EventTimelineItem], room id: String) {
+	private func incoming(_ items: [EventTimelineItem], room id: String) {
 		guard let peer = roomPeer[id] else { return }
 		for item in items {
 			guard item.isRemote, !item.isOwn, case let .eventId(eventID) = item.eventOrTransactionId,
@@ -654,10 +681,18 @@ public final class MatrixClient: IMService {
 				guard delivered[eventID] != true else { continue }
 				delivered[eventID] = true
 				typing[id]?.remove(sender)
-				// The event's own JSON keeps the namespaced font and nudge keys.
-				let json = item.lazyProvider.latestJson().flatMap { try? JSON(data: Data($0.utf8)) }
-				var raw = json?["content"] ?? .null
-				if raw["body"].string == nil { raw = ["msgtype": "m.text", "body": .string(message.body)] }
+				if case let .image(image) = message.msgType {
+					tasks.append(Task {
+						if let data = await self.download(image.source, size: image.info?.size) {
+							self.onEvent?(.conversation(peer: peer, .picture(from: sender, displayName: name, data: data, filename: image.filename)))
+						} else {
+							self.onEvent?(.conversation(peer: peer, .message(from: sender, displayName: name,
+							                                                 text: "[Picture: \(image.filename)]", format: TextFormat())))
+						}
+					})
+					continue
+				}
+				let raw = Self.content(of: item, message: message)
 				if MatrixMessage.isNudge(raw) {
 					onEvent?(.conversation(peer: peer, .nudge(from: sender)))
 				} else {
@@ -668,6 +703,86 @@ public final class MatrixClient: IMService {
 				continue
 			}
 		}
+	}
+
+	/// An item's event content, from its JSON so the namespaced font and nudge
+	/// keys survive; the latest edit's content if it was edited.
+	private static func content(of item: EventTimelineItem, message: MessageContent) -> JSON {
+		var raw = item.lazyProvider.latestJson().flatMap { try? JSON(data: Data($0.utf8)) }?["content"] ?? .null
+		if !raw["m.new_content"].isNull { raw = raw["m.new_content"] }
+		if raw["body"].string == nil { raw = ["msgtype": "m.text", "body": .string(message.body)] }
+		return raw
+	}
+
+	/// An image message's file, decrypted if need be; nil when it's very large or fails.
+	private func download(_ source: MediaSource, size: UInt64?) async -> Data? {
+		guard let client, (size ?? 0) <= 20_000_000 else { return nil }
+		do {
+			return try await client.getMediaContent(mediaSource: source)
+		} catch {
+			log?("[matrix] couldn't download a picture: \(error)")
+			return nil
+		}
+	}
+
+	/// The conversation's timeline, once watchConversations has made it.
+	private func timeline(for id: String) async -> Timeline? {
+		for _ in 0..<50 {
+			if let timeline = timelines[id] { return timeline }
+			try? await Task.sleep(nanoseconds: 100_000_000)
+		}
+		return nil
+	}
+
+	/// Messages from before this sign-in, from the room's timeline, fetching
+	/// more from the server when the local cache is short.
+	public func recentMessages(with peer: String, limit: Int) async -> [IMHistoryMessage] {
+		guard let id = existingRoom(with: peer), let timeline = await timeline(for: id) else { return [] }
+		let cutoff = signedInAt.timeIntervalSince1970 - 10
+		func earlier() -> [EventTimelineItem] {
+			(roomItems[id] ?? []).compactMap { $0.asEvent() }.filter {
+				guard case .msgLike = $0.content else { return false }
+				return Double($0.timestamp) / 1000 < cutoff
+			}
+		}
+		for _ in 0..<3 where earlier().count < limit {
+			let atStart = (try? await timeline.paginateBackwards(numEvents: UInt16(limit))) ?? true
+			try? await Task.sleep(nanoseconds: 300_000_000)  // let the diffs arrive
+			if atStart { break }
+		}
+		let items = Array(earlier().suffix(limit))
+		var out: [IMHistoryMessage] = []
+		for (n, item) in items.enumerated() {
+			guard case let .msgLike(content) = item.content else { continue }
+			let outgoing = item.isOwn, sender = item.sender
+			let senderName = outgoing ? displayName : name(of: sender)
+			let date = Date(timeIntervalSince1970: Double(item.timestamp) / 1000)
+			switch content.kind {
+			case .unableToDecrypt:
+				out.append(IMHistoryMessage(sender: sender, senderName: senderName, text: "This message couldn't be decrypted.",
+				                            format: MatrixMessage.noticeFormat, date: date, outgoing: outgoing))
+			case let .message(message):
+				if case let .image(image) = message.msgType {
+					// Only the last few pictures are downloaded.
+					let data = n >= items.count - 6 ? await download(image.source, size: image.info?.size) : nil
+					out.append(IMHistoryMessage(sender: sender, senderName: senderName, text: "[Picture: \(image.filename)]",
+					                            picture: data, date: date, outgoing: outgoing))
+					continue
+				}
+				let raw = Self.content(of: item, message: message)
+				if MatrixMessage.isNudge(raw) {
+					out.append(IMHistoryMessage(sender: sender, senderName: senderName,
+					                            text: outgoing ? "You sent a nudge." : "\(senderName) sent a nudge.",
+					                            format: MatrixMessage.noticeFormat, date: date, outgoing: outgoing))
+				} else {
+					out.append(IMHistoryMessage(sender: sender, senderName: senderName, text: MatrixMessage.text(of: raw, senderName: senderName),
+					                            format: MatrixMessage.format(of: raw), date: date, outgoing: outgoing))
+				}
+			default:
+				continue
+			}
+		}
+		return out
 	}
 
 	private func typingChanged(_ users: [String], room id: String) {
@@ -847,6 +962,32 @@ public final class MatrixClient: IMService {
 		Task { try? await room.typingNotice(isTyping: false) }
 	}
 
+	public var supportsPictures: Bool { true }
+
+	/// An m.image; in encrypted rooms the SDK encrypts the file before uploading it.
+	public func sendPicture(to peer: String, data: Data, filename: String) async {
+		do {
+			let room = try await conversationRoom(with: peer)
+			guard let timeline = await timeline(for: room.id()) else { throw MatrixError.badResponse("the conversation isn't loaded yet") }
+			let size = Self.imageSize(data)
+			let info = ImageInfo(height: size.map { UInt64($0.height) }, width: size.map { UInt64($0.width) },
+			                     mimetype: MatrixMessage.imageMimeType(data), size: UInt64(data.count),
+			                     thumbnailInfo: nil, thumbnailSource: nil, blurhash: nil, isAnimated: nil)
+			let params = UploadParameters(source: .data(bytes: data, filename: filename), caption: nil, formattedCaption: nil,
+			                              mentions: nil, inReplyTo: nil)
+			try await timeline.sendImage(params: params, thumbnailSource: nil, imageInfo: info).join()
+		} catch {
+			onEvent?(.conversation(peer: peer, .deliveryFailed(text: filename, reason: Self.describe(error))))
+		}
+	}
+
+	private nonisolated static func imageSize(_ data: Data) -> (width: Int, height: Int)? {
+		guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+		      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+		      let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+		return (width, height)
+	}
+
 	public func sendNudge(to peer: String) async throws {
 		try await send(MatrixMessage.nudge(), in: try await conversationRoom(with: peer))
 	}
@@ -997,6 +1138,22 @@ private final class TimelineWatcher: TimelineListener, @unchecked Sendable {
 }
 
 private extension TimelineDiff {
+	func apply(to items: inout [TimelineItem]) {
+		switch self {
+		case let .append(values): items.append(contentsOf: values)
+		case .clear: items.removeAll()
+		case let .pushFront(value): items.insert(value, at: 0)
+		case let .pushBack(value): items.append(value)
+		case .popFront: if !items.isEmpty { items.removeFirst() }
+		case .popBack: if !items.isEmpty { items.removeLast() }
+		case let .insert(index, value): items.insert(value, at: min(Int(index), items.count))
+		case let .set(index, value): if Int(index) < items.count { items[Int(index)] = value }
+		case let .remove(index): if Int(index) < items.count { items.remove(at: Int(index)) }
+		case let .truncate(length): if Int(length) < items.count { items.removeSubrange(Int(length)...) }
+		case let .reset(values): items = values
+		}
+	}
+
 	/// The items this change brings in (new or replaced); removals carry none.
 	var items: [TimelineItem] {
 		switch self {
@@ -1019,11 +1176,6 @@ private final class IgnoredListener: IgnoredUsersListener, @unchecked Sendable {
 	func call(ignoredUserIds: [String]) { handler(ignoredUserIds) }
 }
 
-private final class ProfileWatcher: ProfileListener, @unchecked Sendable {
-	let handler: (UserProfile) -> Void
-	init(_ handler: @escaping (UserProfile) -> Void) { self.handler = handler }
-	func onUpdate(profile: UserProfile) { handler(profile) }
-}
 
 private final class VerificationStateWatcher: VerificationStateListener, @unchecked Sendable {
 	let handler: (VerificationState) -> Void

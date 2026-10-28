@@ -40,6 +40,36 @@ public protocol IMService: AnyObject {
 	func sendTyping(to peer: String)
 	func sendNudge(to peer: String) async throws
 	func closeConversation(with peer: String)
+
+	/// Whether sendPicture works (the front ends then offer pasted images).
+	var supportsPictures: Bool { get }
+	func sendPicture(to peer: String, data: Data, filename: String) async
+	/// Earlier messages with `peer` from before this sign-in, oldest first;
+	/// empty where the service keeps no history (MSNP).
+	func recentMessages(with peer: String, limit: Int) async -> [IMHistoryMessage]
+}
+
+/// A message from before this sign-in, for a conversation window's history.
+public struct IMHistoryMessage {
+	public var sender: String
+	public var senderName: String
+	public var text: String
+	public var format: TextFormat
+	/// An image message's picture (encoded); `text` then names it.
+	public var picture: Data?
+	public var date: Date
+	public var outgoing: Bool
+
+	public init(sender: String, senderName: String, text: String, format: TextFormat = TextFormat(),
+	            picture: Data? = nil, date: Date, outgoing: Bool) {
+		self.sender = sender
+		self.senderName = senderName
+		self.text = text
+		self.format = format
+		self.picture = picture
+		self.date = date
+		self.outgoing = outgoing
+	}
 }
 
 public extension IMService {
@@ -50,6 +80,14 @@ public extension IMService {
 	func sendMessage(to peer: String, text: String) async {
 		await sendMessage(to: peer, text: text, format: TextFormat())
 	}
+
+	var supportsPictures: Bool { false }
+
+	func sendPicture(to peer: String, data: Data, filename: String) async {
+		onEvent?(.conversation(peer: peer, .deliveryFailed(text: filename, reason: "Pictures can't be sent on this service.")))
+	}
+
+	func recentMessages(with peer: String, limit: Int) async -> [IMHistoryMessage] { [] }
 }
 
 extension MessengerClient: IMService {

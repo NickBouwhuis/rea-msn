@@ -270,7 +270,7 @@ private struct MeArea: View {
 			UserTile(seed: app.myEmail, picture: app.myPicture, size: 48)
 				.padding(.trailing, 5)
 			VStack(alignment: .leading, spacing: 0) {
-				StatusMenu(current: app.myStatus, pick: app.setStatus) {
+				StatusMenu(current: app.myStatus, pick: app.setStatus, signOut: app.signOut) {
 					TransparentHover {
 						HStack(spacing: 3) {
 							Emoticons.text(app.myName, enabled: app.settings.convertEmoticons)

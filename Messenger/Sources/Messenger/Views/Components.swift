@@ -117,6 +117,8 @@ struct DisplayPicture: View {
 struct StatusMenu<Label: View>: View {
 	let current: Presence
 	let pick: (Presence) -> Void
+	/// Adds "Sign out" under the statuses, as WLM's name menu has it.
+	var signOut: (() -> Void)? = nil
 	@ViewBuilder let label: () -> Label
 
 	var body: some View {
@@ -129,6 +131,10 @@ struct StatusMenu<Label: View>: View {
 					?? NSImage(systemSymbolName: "person.fill", accessibilityDescription: nil)?
 						.withSymbolConfiguration(.init(paletteColors: [NSColor(p.tint.colors[1])]))
 				menu.addItem(item)
+			}
+			if let signOut {
+				menu.addItem(.separator())
+				menu.addItem(ClosureMenuItem(title: "Sign out", handler: signOut))
 			}
 			let mouse = NSEvent.mouseLocation
 			menu.popUp(positioning: nil, at: NSPoint(x: mouse.x - 8, y: mouse.y - 6), in: nil)

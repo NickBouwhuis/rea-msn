@@ -151,12 +151,16 @@ otherwise. After the first sign-in Messenger asks you to verify the session, by 
 Element or another of your sessions (either side can start), or with your recovery key (Actions ▸
 Verify This Session). Until then, other people's apps may not share message keys with it.
 Messages that can't be decrypted yet show a notice; the message follows if its key arrives later.
+Opening a conversation shows the last 30 messages from before you signed in, greyed (reloaded once
+you verify, when your other sessions and key backup can supply their keys). Paste or drop a picture
+into the message box to send it (HEIC and TIFF go as JPEG); pictures show in the conversation, and
+double-clicking one opens it.
 
 Not supported yet:
 - Group rooms: only one-to-one chats are shown.
 - Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
   Synapse still offer for existing clients.
-- Message history: like WLM, a conversation starts empty.
+- Other files, voice and video. Pictures only.
 - Presence comes from polling every 10 seconds (the SDK doesn't expose presence events). On servers
   with presence turned off, contacts always look Offline, but you can still message them.
 - Linux: encryption and verification (see above).
