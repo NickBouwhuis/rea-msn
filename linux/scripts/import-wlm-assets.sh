@@ -21,15 +21,6 @@ mkdir -p "$STAGE"
 python3 -I "$RE/wlm_skin.py" "$STAGE/msgsresdll" "$STAGE/msgslangdll" "$DEST/Skin" --icon "$STAGE/ctticonico"
 echo "Skin installed in $DEST/Skin"
 
-# The launcher icon (the app's .desktop entry names chat.messenger.wlm81).
-ICONS="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
-for size in 16 32 48 256; do
-	[ -f "$DEST/Skin/icon/$size.png" ] || continue
-	mkdir -p "$ICONS/${size}x${size}/apps"
-	cp "$DEST/Skin/icon/$size.png" "$ICONS/${size}x${size}/apps/chat.messenger.wlm81.png"
-done
-gtk4-update-icon-cache -q -t -f "$ICONS" 2>/dev/null || true
-
 mkdir -p "$DEST/Sounds"
 for name in online type nudge newemail; do
 	ffmpeg -loglevel error -y -i "$STAGE/${name}wma" "$DEST/Sounds/$name.wav"

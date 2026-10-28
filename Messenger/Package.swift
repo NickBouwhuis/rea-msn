@@ -7,6 +7,8 @@ import PackageDescription
 // matrix-rust-sdk (end-to-end encryption, verification), on Linux for now
 // over the plain client-server API.
 var targets: [Target] = [
+	// zlib, for MSZIP-compressed wink cabinets (MSNKit/Util/Cabinet.swift).
+	.systemLibrary(name: "CZlib", providers: [.apt(["zlib1g-dev"])]),
 	.executableTarget(name: "msnctl", dependencies: ["MSNKit", "MatrixKit"]),
 	.testTarget(name: "MSNKitTests", dependencies: ["MSNKit"]),
 	.testTarget(name: "MatrixKitTests", dependencies: ["MatrixKit", "MSNKit"]),
@@ -21,7 +23,7 @@ var dependencies: [Package.Dependency] = []
 #if os(Linux)
 dependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"))
 targets += [
-	.target(name: "MSNKit", dependencies: [.product(name: "Crypto", package: "swift-crypto")]),
+	.target(name: "MSNKit", dependencies: ["CZlib", .product(name: "Crypto", package: "swift-crypto")]),
 	.target(name: "MatrixKit", dependencies: ["MSNKit"]),
 	.systemLibrary(name: "CGtk", pkgConfig: "gtk4", providers: [.apt(["libgtk-4-dev"])]),
 	.executableTarget(name: "MessengerGTK", dependencies: ["MSNKit", "MatrixKit", "CGtk"]),
@@ -30,7 +32,7 @@ products.append(.executable(name: "MessengerGTK", targets: ["MessengerGTK"]))
 #else
 dependencies.append(.package(url: "https://github.com/matrix-org/matrix-rust-components-swift", exact: "26.10.27"))
 targets += [
-	.target(name: "MSNKit"),
+	.target(name: "MSNKit", dependencies: ["CZlib"]),
 	.target(name: "MatrixKit", dependencies: ["MSNKit", .product(name: "MatrixRustSDK", package: "matrix-rust-components-swift")]),
 	.executableTarget(name: "Messenger", dependencies: ["MSNKit", "MatrixKit"]),
 ]

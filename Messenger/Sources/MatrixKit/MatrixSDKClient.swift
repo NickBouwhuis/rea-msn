@@ -504,7 +504,6 @@ public final class MatrixClient: IMService {
 			c.lists = l
 			c.status = presence[user] ?? .offline
 			c.personalMessage = statusMessages[user] ?? ""
-			c.displayPicture = picture(avatarURLs[user])
 			next[user] = c
 		}
 		let old = contacts
@@ -562,10 +561,43 @@ public final class MatrixClient: IMService {
 				}
 				guard !data.isEmpty, self.client != nil else { return }
 				self.pictures[mxc] = data
-				self.rebuildContacts(emit: true)
-				if mxc == self.myAvatarURL { self.onEvent?(.profileChanged) }
+				self.pictureArrived(mxc)
 			})
 		}
+	}
+
+	/// A downloaded avatar reaches whoever uses it, us included.
+	private func pictureArrived(_ mxc: String) {
+		if mxc == myAvatarURL {
+			displayPicture = picture(mxc)
+			onEvent?(.displayPictureChanged(email: email))
+		}
+		for (user, url) in avatarURLs where url == mxc && contacts[user] != nil {
+			onEvent?(.displayPictureChanged(email: user))
+		}
+	}
+
+	public func displayPicture(of email: String) -> Data? {
+		picture(avatarURLs[email])
+	}
+
+	/// Your Matrix avatar: uploaded (nil removes it).
+	public func setDisplayPicture(_ data: Data?) async {
+		guard let client else { return }
+		do {
+			if let data {
+				try await client.uploadAvatar(mimeType: MatrixMessage.imageMimeType(data), data: data)
+			} else {
+				try await client.removeAvatar()
+			}
+		} catch {
+			log?("[matrix] couldn't change the avatar: \(error)")
+			return
+		}
+		myAvatarURL = try? await client.avatarUrl()
+		if let myAvatarURL, let data { pictures[myAvatarURL] = data }
+		displayPicture = picture(myAvatarURL)
+		onEvent?(.displayPictureChanged(email: email))
 	}
 
 	private func loadOwnProfile(personalMessage psm: String?) async {

@@ -267,7 +267,13 @@ private struct MeArea: View {
 
 	var body: some View {
 		HStack(alignment: .top, spacing: 0) {
-			UserTile(seed: app.myEmail, picture: app.myPicture, size: 48)
+			UserTile(seed: app.myEmail, size: 48, picture: app.displayPicture(of: app.myEmail))
+				.help(Skin.shared.string(2092, "Select a Display Picture"))
+				.onTapGesture { app.chooseDisplayPicture() }
+				.contextMenu {
+					Button(Skin.shared.string(2092, "Select a Display Picture") + "…") { app.chooseDisplayPicture() }
+					Button("Remove Display Picture") { app.setDisplayPicture(nil) }
+				}
 				.padding(.trailing, 5)
 			VStack(alignment: .leading, spacing: 0) {
 				StatusMenu(current: app.myStatus, pick: app.setStatus, signOut: app.signOut) {
@@ -365,7 +371,7 @@ struct AddedYouSheet: View {
 	var body: some View {
 		VStack(alignment: .leading, spacing: 12) {
 			HStack(spacing: 10) {
-				UserTile(seed: request.email, picture: app.contact(request.email)?.displayPicture, size: 40)
+				UserTile(seed: request.email, size: 40, picture: app.displayPicture(of: request.email))
 				VStack(alignment: .leading, spacing: 2) {
 					Text("\(request.displayName) (\(request.email))").font(.system(size: 12, weight: .semibold)).foregroundStyle(WLM.ink)
 					Text("has added you to his or her contact list.").font(.system(size: 12)).foregroundStyle(WLM.ink)

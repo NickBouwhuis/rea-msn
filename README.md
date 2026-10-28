@@ -30,9 +30,10 @@ devserver/matrix/      a throwaway Synapse homeserver for testing MatrixKit
 ## Install a release
 
 Download the DMG (macOS 14+, Apple Silicon and Intel) or the `.deb` for your Ubuntu release and
-architecture (`ubuntu24.04` or `ubuntu26.04`, amd64 or arm64) from the repository's Releases page. Neither contains anything from
-Microsoft. After installing, import the look, emoticons and sounds from your own copy of the Escargot
-WLM 8.1 installer (`escargot-wlm-8.1.0178-en.msi`):
+architecture (`ubuntu24.04` or `ubuntu26.04`, amd64 or arm64) from the repository's Releases page.
+Apart from the Messenger icon, neither contains anything from Microsoft. After installing, import the
+look, emoticons and sounds from your own copy of the Escargot WLM 8.1 installer
+(`escargot-wlm-8.1.0178-en.msi`):
 
 ```sh
 # macOS (needs: brew install sevenzip ffmpeg)
@@ -55,8 +56,9 @@ app once, then allow it under System Settings › Privacy & Security › "Open A
   package because system library versions differ (24.04 has `libxml2.so.2`, 26.04 `libxml2.so.16`).
 
 The packages are uploaded as workflow artifacts. Pushing a tag such as `v0.1.0` also publishes them
-as a GitHub release. To sign and notarize the DMG, add the repository secrets listed at the top of
-the workflow: a Developer ID Application certificate and an App Store Connect API key.
+as a GitHub release. To sign and notarize the DMG, run `Messenger/scripts/set-signing-secrets.sh` with your exported
+Developer ID Application certificate (.p12) and an App Store Connect API key; it stores them as the
+repository secrets the workflow uses, and its header explains how to get both.
 
 ## macOS
 
@@ -73,9 +75,8 @@ The import needs `7zz`, `python3` and `ffmpeg` (`brew install sevenzip ffmpeg`).
 msgsres.dll's DirectUI resources, including Microsoft's custom RLE image format, into
 `~/Library/Application Support/MessengerMac/{Skin,Sounds}`. The views then use them by their original
 resource IDs: the frame, header and "vapor", status icons, toolbar icons, buttons, checkboxes, the
-Messenger icon, the emoticon set (32-bit, with WLM's animated emoticons), Tahoma 8 pt and the stylesheet colours. Run the import before
-`build-app.sh` so the app bundle gets the real icon. Without the import the app falls back to a drawn
-approximation.
+emoticon set (32-bit, with WLM's animated emoticons), Tahoma 8 pt and the stylesheet colours. Without
+the import the app falls back to a drawn approximation. The app icon comes from `assets/icon`.
 
 ## Linux
 
@@ -112,11 +113,17 @@ another host.
 - Add, delete, block and unblock contacts; the "X has added you" prompt
 - Conversations: formatted text (font, colour, bold, italic), WLM emoticons, typing indicator, nudges
   (window shake), multi-packet messages, delivery-failure notices
+- Group conversations: invite contacts into a conversation, and join ones you're invited to
+- Offline messages: write to an offline contact and they get it when they sign in; messages left for
+  you arrive when you do
+- Display pictures: set your own (scaled to WLM's 96×96) and see your contacts', fetched peer-to-peer
+- File transfer: send files, accept or decline incoming ones, with progress (through the switchboard)
+- Winks: shown as their preview image (WLM's winks are Flash animations, which can't be played)
 - WLM-style toasts (macOS) or desktop notifications (Linux), sounds, and "remember me / my password"
   through the Keychain or the Secret Service
 
-The port has no P2P stack, so display pictures, file transfer, winks, voice and video are not
-supported, and neither are offline messages. See the RE notes for details.
+Not supported: voice and video calls. WLM 8.1 sets those up with direct connections that Escargot
+doesn't relay. See the RE notes for details.
 
 ## Matrix (experimental)
 
@@ -171,12 +178,15 @@ Not supported yet:
 cd devserver && docker compose up -d --build     # local Escargot: NS :1863, SB :1864, HTTP :8081
 cd ../Messenger
 swift test                                       # protocol unit tests
-swift run msnctl --local e2e alice@example.com bob@example.com 123456
+swift run msnctl --local e2e alice@example.com bob@example.com 123456 carol@example.com
 ```
 
-The e2e scenario signs in two clients and checks each WLM feature end to end:
-sign-in, a rejected bad password, presence, name and PSM, contact add and approval, IM in both
-directions, typing, nudge, offline delivery failure, block/unblock, and roaming after re-sign-in.
+The e2e scenario signs in the clients and checks each WLM feature end to end: sign-in, a rejected
+bad password, presence, name and PSM, contact add and approval, IM in both directions, typing,
+nudge, a group conversation (with the third account), display pictures, a file transfer and a
+declined one, a wink, an offline message stored and delivered, block/unblock, and roaming after
+re-sign-in. `msnctl say … --picture FILE --invite EMAIL`, `msnctl sendfile` and `msnctl wink` drive
+the apps from another account.
 Seeded test accounts are `alice@`, `bob@` and `carol@example.com`, all with password `123456`.
 
 The Matrix backend has the same scenario against a local Synapse (`@alice`, `@bob` and
@@ -226,9 +236,9 @@ python3 re/scripts/wlm_skin.py msgsresdll msgslangdll out/  # DirectUI resources
 
 ## Legal
 
-Windows Live Messenger and its assets are Microsoft's. The apps and their releases contain no
-Microsoft code, artwork or sounds: the UI images, icon, emoticons, strings and sounds are only decoded
-locally from an installer you already have. The one exception is the project page, whose example
-conversation shows ten of Messenger's emoticons and its default display picture (`site/emoticons`,
-`site/pictures`) for illustration. Reverse engineering was done for interoperability with the Escargot
+Windows Live Messenger and its assets are Microsoft's. Apart from the Messenger icon (`assets/icon`,
+from WLM 8.1's `ctticon.ico`), the apps and their releases contain no Microsoft code, artwork or
+sounds: the UI images, emoticons, strings and sounds are only decoded locally from an installer you
+already have. The project page's example conversation also shows ten of Messenger's emoticons and its
+default display picture (`site/emoticons`, `site/pictures`) for illustration. Reverse engineering was done for interoperability with the Escargot
 service. The dev server image clones the Escargot server source (CC BY-NC 4.0) at build time.

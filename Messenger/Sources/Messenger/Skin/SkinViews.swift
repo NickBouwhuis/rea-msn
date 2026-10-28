@@ -281,14 +281,14 @@ struct StatusIcon: View {
 /// usertileview inside idUserTileBorder: 1px #D8D9D9 border, 2px white padding.
 struct UserTile: View {
 	let seed: String
-	/// A display picture (encoded image); without one, WLM's default tile.
-	var picture: Data? = nil
 	var size: CGFloat = 96
+	/// The person's display picture; WLM's default tile when there's none.
+	var picture: NSImage? = nil
 
 	var body: some View {
 		Group {
-			if let picture, let img = NSImage(data: picture) {
-				Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+			if let picture {
+				Image(nsImage: picture).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
 					.frame(width: size, height: size).clipped()
 			} else if let img = Skin.shared.image(size > 64 ? R.defaultTileLarge : R.defaultTileSmall) {
 				Image(nsImage: img).resizable().interpolation(.high).frame(width: size, height: size)

@@ -4,7 +4,6 @@
 #   VERSION=1.2.3          CFBundleShortVersionString (default 0.0.0; "~suffix" is dropped)
 #   BUILD_NUMBER=42        CFBundleVersion (default 1)
 #   SIGN_IDENTITY="Developer ID Application: …"  hardened-runtime signing (default: ad-hoc)
-#   NO_IMPORTED_ICON=1     don't embed the icon from your imported skin (for builds you share)
 set -eu
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0}"
@@ -19,23 +18,18 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Messenger"
 
-# The real Messenger icon, from the installer you imported with
-# scripts/import-wlm-assets.sh (16/32/48 px frames + the 256 px master).
-ICON="$HOME/Library/Application Support/MessengerMac/Skin/icon"
-if [ -z "${NO_IMPORTED_ICON:-}" ] && [ -f "$ICON/256.png" ]; then
-	ICONSET=build/AppIcon.iconset
-	rm -rf "$ICONSET" && mkdir -p "$ICONSET"
-	cp "$ICON/16.png" "$ICONSET/icon_16x16.png"
-	cp "$ICON/32.png" "$ICONSET/icon_16x16@2x.png"
-	cp "$ICON/32.png" "$ICONSET/icon_32x32.png"
-	sips -z 64 64 "$ICON/256.png" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
-	sips -z 128 128 "$ICON/256.png" --out "$ICONSET/icon_128x128.png" >/dev/null
-	cp "$ICON/256.png" "$ICONSET/icon_128x128@2x.png"
-	cp "$ICON/256.png" "$ICONSET/icon_256x256.png"
-	iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
-else
-	echo "note: generic bundle icon; the app shows the imported Messenger icon at runtime"
-fi
+# The Messenger icon (assets/icon, from WLM 8.1's ctticon.ico).
+ICON=../assets/icon
+ICONSET=build/AppIcon.iconset
+rm -rf "$ICONSET" && mkdir -p "$ICONSET"
+cp "$ICON/16.png" "$ICONSET/icon_16x16.png"
+cp "$ICON/32.png" "$ICONSET/icon_16x16@2x.png"
+cp "$ICON/32.png" "$ICONSET/icon_32x32.png"
+sips -z 64 64 "$ICON/256.png" --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+sips -z 128 128 "$ICON/256.png" --out "$ICONSET/icon_128x128.png" >/dev/null
+cp "$ICON/256.png" "$ICONSET/icon_128x128@2x.png"
+cp "$ICON/256.png" "$ICONSET/icon_256x256.png"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 
 # The asset importer, for installs without a source checkout; same layout as
 # the repository, so the scripts find re/ by relative path.

@@ -16,7 +16,6 @@ final class MainWindow {
 	private var emailEntry: Ptr!
 	private var passwordEntry: Ptr!
 	private var passwordLabel: Ptr!
-	private var mePicture: Ptr?
 	/// Replaces the password box when a Matrix homeserver signs in through the browser.
 	private var browserNote: Ptr!
 	private var matrixMethod: MatrixClient.SignInMethod?
@@ -33,6 +32,7 @@ final class MainWindow {
 
 	// Contact list widgets
 	private var meName: Ptr!
+	private var mePicture: Ptr!
 	private var mePSM: Ptr!
 	private var meStatusPopover: Ptr!
 	private var list: Ptr!
@@ -52,6 +52,7 @@ final class MainWindow {
 		state.onPhase.append { [weak self] in self?.phaseChanged() }
 		state.onContacts.append { [weak self] in self?.rebuildList() }
 		state.onProfile.append { [weak self] in self?.refreshMe() }
+		state.onPictures.append { [weak self] in self?.refreshMePicture() }
 		state.onAddRequest = { [weak self] in self?.showAddRequests() }
 		phaseChanged()
 	}
@@ -277,9 +278,22 @@ final class MainWindow {
 		// MeArea: tile, name ▾ (status), personal message, service toolbar.
 		let me = hbox(5)
 		margins(me, top: 4, start: 12, bottom: 4, end: 10)
-		let meTile = userTileParts(size: 48)
-		mePicture = meTile.picture
-		append(me, meTile.frame)
+		let meTile = userTile(size: 48)
+		mePicture = gtk_widget_get_first_child(c(meTile)).map { raw($0) }
+		gtk_widget_set_tooltip_text(c(meTile), skin.string(2092, "Select a Display Picture"))
+		clickGesture(meTile) { _ in AppState.shared.chooseDisplayPicture() }
+		clickGesture(meTile, button: 3) { [weak self] _ in
+			guard let self else { return }
+			let menu = vbox(0)
+			let pop = raw(gtk_popover_new())
+			append(menu, menuItem(self.skin.string(2092, "Select a Display Picture") + "…") { popdown(pop); AppState.shared.chooseDisplayPicture() })
+			append(menu, menuItem("Remove display picture") { popdown(pop); AppState.shared.setDisplayPicture(nil) })
+			gtk_popover_set_child(c(pop), c(menu))
+			gtk_widget_set_parent(c(pop), c(meTile))
+			on(pop, "closed") { gtk_widget_unparent(c(pop)) }
+			gtk_popover_popup(c(pop))
+		}
+		append(me, meTile)
 		let meText = vbox(0)
 		expand(meText, h: true)
 		meName = hbox(3)
@@ -345,8 +359,13 @@ final class MainWindow {
 
 	private var psmPlaceholder: String { skin.string(61130, "<Enter a personal message>") }
 
+	private func refreshMePicture() {
+		guard let mePicture else { return }
+		setPicture(mePicture, data: state.displayPicture(of: state.myEmail), fallback: skin.image(R.defaultTileSmall))
+	}
+
 	private func refreshMe() {
-		if let mePicture { setPicture(mePicture, data: state.myPicture, fallback: skin.image(R.defaultTileSmall)) }
+		refreshMePicture()
 		removeAllChildren(meName)
 		append(meName, RichText.line(state.myName.isEmpty ? state.myEmail : state.myName, css: ["wlm-bold"]))
 		append(meName, label("(\(state.myStatus.displayName))", css: ["wlm-label"]))
@@ -514,7 +533,7 @@ final class MainWindow {
 		let (w, _) = Chrome.window(app: nil, width: 420, height: 230)
 		let body = vbox(8)
 		margins(body, top: 12, start: 16, bottom: 12, end: 16)
-		append(body, hbox(10, [userTile(size: 48, picture: state.contact(req.email)?.displayPicture), vbox(2, [
+		append(body, hbox(10, [userTile(size: 48, picture: state.displayPicture(of: req.email)), vbox(2, [
 			label("\(req.name) (\(req.email))", css: ["wlm-bold"]),
 			label("has added you to his or her contact list.", css: ["wlm-label"]),
 		])]))

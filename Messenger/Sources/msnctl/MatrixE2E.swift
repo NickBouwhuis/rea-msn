@@ -10,7 +10,7 @@ extension CLI {
 	/// server. With a third account, also checks a message that can't be
 	/// decrypted: shown as a notice, and never answered in the clear.
 	func matrixE2E(_ idA: String, _ idB: String, _ password: String, encryptedFrom idC: String?) async throws {
-		let a = makeClient("A"), b = makeClient("B")
+		let a = makeService("A"), b = makeService("B")
 		var inbox: [String] = []
 		/// "B<-@alice:localhost: text": the raw text (inbox holds debug descriptions, which escape quotes).
 		var texts: [String] = []
@@ -41,7 +41,7 @@ extension CLI {
 
 		try await step("bad password is rejected (M_FORBIDDEN)") {
 			do {
-				try await makeClient("X").signIn(email: idA, password: password + "-wrong")
+				try await makeService("X").signIn(email: idA, password: password + "-wrong")
 				throw MSNPError.unexpected("sign-in succeeded")
 			} catch MatrixError.authenticationFailed {}
 		}
@@ -148,7 +148,7 @@ extension CLI {
 		}
 		try await step("contact list survives a fresh sign-in") {
 			a.signOut()
-			let a2 = makeClient("A2")
+			let a2 = makeService("A2")
 			try await a2.signIn(email: idA, password: password)
 			guard a2.contacts[idB]?.isForward == true else { throw MSNPError.unexpected("B missing from A's list") }
 			guard a2.displayName == "Alice ☕ on Matrix" else { throw MSNPError.unexpected("name not kept: \(a2.displayName)") }

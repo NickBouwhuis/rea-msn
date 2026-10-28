@@ -459,7 +459,6 @@ public final class MatrixClient: IMService {
 			c.lists = l
 			c.status = presence[user] ?? .offline
 			c.personalMessage = statusMessages[user] ?? ""
-			c.displayPicture = picture(avatarURLs[user])
 			next[user] = c
 		}
 		let old = contacts
@@ -492,12 +491,26 @@ public final class MatrixClient: IMService {
 			Task {
 				guard let data = try? await api.thumbnail(mxc), !data.isEmpty, self.api != nil else { return }
 				self.pictures[mxc] = data
-				let mine = mxc == self.myAvatarURL
-				self.rebuildContacts(emit: true)
-				if mine { self.onEvent?(.profileChanged) }
+				self.pictureArrived(mxc)
 			}
 		}
 	}
+
+	/// A downloaded avatar reaches whoever uses it, us included.
+	private func pictureArrived(_ mxc: String) {
+		if mxc == myAvatarURL {
+			displayPicture = picture(mxc)
+			onEvent?(.displayPictureChanged(email: email))
+		}
+		for (user, url) in avatarURLs where url == mxc && contacts[user] != nil {
+			onEvent?(.displayPictureChanged(email: user))
+		}
+	}
+
+	public func displayPicture(of email: String) -> Data? {
+		picture(avatarURLs[email])
+	}
+
 
 	private func loadProfile(personalMessage psm: String?) async {
 		guard let api else { return }
