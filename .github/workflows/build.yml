@@ -112,7 +112,13 @@ jobs:
           tar zxf "swiftly-$(uname -m).tar.gz"
           ./swiftly init --quiet-shell-followup --assume-yes --skip-install
           . "$HOME/.local/share/swiftly/env.sh"
-          swiftly install --use --assume-yes "$SWIFT_VERSION"
+          # swiftly lists the system packages this toolchain still needs (they differ
+          # per release) in a script instead of failing; run it.
+          swiftly install --use --assume-yes --post-install-file "$RUNNER_TEMP/swift-deps.sh" "$SWIFT_VERSION"
+          if [ -s "$RUNNER_TEMP/swift-deps.sh" ]; then
+            SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
+            $SUDO bash "$RUNNER_TEMP/swift-deps.sh"
+          fi
           swift --version
       - name: Version
         run: |
