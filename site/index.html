@@ -49,7 +49,7 @@ code, pre { font-family: "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospa
 .topbar nav a { color: var(--white); margin-left: 22px; font-size: 15px; text-decoration: none; opacity: .9; }
 .topbar nav a:hover { opacity: 1; text-decoration: underline; }
 
-.hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 470px; gap: 56px; align-items: center; padding-top: 64px; }
+.hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 490px; gap: 56px; align-items: center; padding-top: 64px; }
 .hero h1 { font-size: 52px; line-height: 1.08; letter-spacing: -0.025em; margin: 0 0 20px; font-weight: bold; text-shadow: 0 1px 0 rgba(0,0,0,.18); }
 .hero .lede { font-size: 18px; line-height: 1.55; margin: 0 0 32px; max-width: 34em; color: #F2F8FB; }
 .lede a { color: var(--white); }
@@ -100,7 +100,7 @@ details.debs .menu {
 .convo .frame { display: flex; gap: 5px; }
 .convo .frame i { width: 12px; height: 10px; border: 1.5px solid rgba(255,255,255,.75); border-radius: 2px; display: block; }
 .convo .frame i:first-child { border-width: 0 0 1.5px; height: 8px; }
-.convo .body { display: grid; grid-template-columns: minmax(0, 1fr) 88px; gap: 10px; padding: 0 10px 10px; margin-top: -16px; }
+.convo .body { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 10px; padding: 0 10px 10px; margin-top: -16px; }
 .history {
 	height: 236px; overflow: hidden; background: var(--white);
 	border: 1px solid #BED6E0; padding: 8px 10px; line-height: 1.5;
@@ -118,10 +118,9 @@ span.emo {
 	animation: emo calc(var(--frames) * 250ms) steps(var(--frames)) var(--count, infinite);
 }
 @keyframes emo { to { background-position: calc(-1 * var(--w, 19px) * var(--frames)) 0; } }
-.tile {
-	width: 88px; height: 88px; border: 1px solid #D8D9D9; padding: 3px; background: var(--white);
-}
-.tile div { width: 100%; height: 100%; border-radius: 2px; background: radial-gradient(circle at 50% 36%, #CFE8FB 0 17%, transparent 18%), radial-gradient(ellipse at 50% 105%, #CFE8FB 0 42%, transparent 43%), linear-gradient(160deg, #5BA6E8, #1E64C0); }
+/* Messenger's default display picture, at its own 96 px in a 3 px white frame. */
+.tile { border: 1px solid #D8D9D9; padding: 3px; background: var(--white); line-height: 0; }
+.tile img { width: 96px; height: 96px; }
 .pictures { display: flex; flex-direction: column; justify-content: space-between; }
 .status { color: var(--muted); font-size: 12px; padding: 4px 0 6px; min-height: 26px; }
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
@@ -193,7 +192,7 @@ footer p { max-width: 80ch; }
 @media (max-width: 960px) {
 	.hero { grid-template-columns: 1fr; gap: 40px; padding-top: 40px; }
 	.hero h1 { font-size: 40px; }
-	.convo { max-width: 470px; }
+	.convo { max-width: 490px; }
 	ol.steps, .columns { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
@@ -260,8 +259,8 @@ footer p { max-width: 80ch; }
 						</div>
 					</div>
 					<div class="pictures" aria-hidden="true">
-						<div class="tile"><div></div></div>
-						<div class="tile"><div></div></div>
+						<div class="tile"><img src="pictures/default.png" alt=""></div>
+						<div class="tile"><img src="pictures/default.png" alt=""></div>
 					</div>
 				</div>
 			</figure>
@@ -358,7 +357,7 @@ wlm-messenger</code></pre>
 
 <footer>
 	<div class="wrap">
-		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community. The emoticons in the example conversation are Messenger's originals, © Microsoft, shown for illustration.</p>
+		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community. The emoticons and display pictures in the example conversation are Messenger's originals, © Microsoft, shown for illustration.</p>
 	</div>
 </footer>
 
