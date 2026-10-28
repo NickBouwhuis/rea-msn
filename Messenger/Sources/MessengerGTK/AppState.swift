@@ -249,7 +249,11 @@ final class AppState {
 			}
 			if let w = conversations[c.email] {
 				w.refreshHeader()
-				if previous.isOnline, !c.status.isOnline { w.post(.notice("\(c.displayName) has signed out.")) }
+				if previous.isOnline, !c.status.isOnline {
+					w.post(.notice("\(c.displayName) has signed out."))
+				} else if !previous.isOnline, c.status.isOnline {
+					w.post(.notice("\(c.displayName) has signed in."))
+				}
 			}
 		case let .contactRemoved(email):
 			refresh(); notify(onContacts)

@@ -110,6 +110,14 @@ details.debs .menu {
 .history .msg { padding-left: 14px; }
 .history .nudge { font-weight: bold; margin-top: 6px; }
 .history .notice { color: var(--muted); }
+/* Messenger's emoticons: 19 px cells; animated ones step through their strip
+   every 250 ms like the client, looping or once (then back to frame 0). */
+.emo { display: inline-block; width: 19px; height: 19px; vertical-align: -5px; margin: 0 1px; }
+span.emo {
+	width: var(--w, 19px); background-repeat: no-repeat;
+	animation: emo calc(var(--frames) * 250ms) steps(var(--frames)) var(--count, infinite);
+}
+@keyframes emo { to { background-position: calc(-1 * var(--w, 19px) * var(--frames)) 0; } }
 .tile {
 	width: 88px; height: 88px; border: 1px solid #D8D9D9; padding: 3px; background: var(--white);
 }
@@ -201,7 +209,7 @@ footer p { max-width: 80ch; }
 	.buddy { flex-wrap: wrap; gap: 0 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-	.convo.shaking { animation: none; }
+	.convo.shaking, span.emo { animation: none; }
 }
 </style>
 </head>
@@ -235,7 +243,7 @@ footer p { max-width: 80ch; }
 						</div>
 					</details>
 				</div>
-				<p class="release-note" id="release-note">Free and open source. Nothing from Microsoft is included.</p>
+				<p class="release-note" id="release-note">Free and open source. The downloads contain nothing from Microsoft.</p>
 			</div>
 			<figure class="convo" id="convo" aria-label="Example conversation between Bob on Ubuntu and Alice on macOS" style="margin:0">
 				<div class="title" aria-hidden="true">
@@ -264,7 +272,7 @@ footer p { max-width: 80ch; }
 <main class="wrap">
 	<section id="start" aria-labelledby="start-h">
 		<h2 id="start-h">Get started</h2>
-		<p class="prose">rea-msn ships no Microsoft code, artwork or sounds. You import them from Escargot's copy of the original installer, so the app looks the way you remember.</p>
+		<p class="prose">The app ships no Microsoft code, artwork or sounds. You import them from Escargot's copy of the original installer, so it looks the way you remember.</p>
 		<ol class="steps">
 			<li>
 				<h3>Install the app</h3>
@@ -350,7 +358,7 @@ wlm-messenger</code></pre>
 
 <footer>
 	<div class="wrap">
-		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community.</p>
+		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community. The emoticons in the example conversation are Messenger's originals, © Microsoft, shown for illustration.</p>
 	</div>
 </footer>
 
@@ -364,15 +372,55 @@ wlm-messenger</code></pre>
 
 	// The conversation: from the first chat between the two apps.
 	const script = [
-		{ who: "Bob", text: "Hey Alice! Greetings from Ubuntu 😁 👍" },
-		{ who: "Alice", text: "Hi Bob! Replying from macOS 🙂 ❤️ Coffee? ☕" },
-		{ who: "Bob", text: "Sure! ☕ Let's party 🥳 even if there's a storm coming ⛈️" },
-		{ who: "Alice", text: "Haha, see you on Escargot ⭐" },
+		{ who: "Bob", text: "Hey Alice! Greetings from Ubuntu :D (Y)" },
+		{ who: "Alice", text: "Hi Bob! Replying from macOS :) (L) Coffee? (C)" },
+		{ who: "Bob", text: "Sure! Let's party <:o) even if there's a storm coming (li)" },
+		{ who: "Alice", text: "It's my birthday after all (^) See you on Escargot ;)" },
 	];
+	// Messenger's own emoticons (index in its strip, name, animation frames).
+	const emoticons = {
+		":D": { i: 1, name: "Open-mouthed smile" },
+		"(Y)": { i: 40, name: "Thumbs up" },
+		":)": { i: 0, name: "Smile" },
+		"(L)": { i: 14, name: "Red heart" },
+		"(C)": { i: 32, name: "Coffee cup" },
+		"(*)": { i: 20, name: "Star" },
+		";)": { i: 108, name: "Winking smile", frames: 3, once: true },
+		"(^)": { i: 110, name: "Birthday cake", frames: 8, w: 17 },
+		"<:o)": { i: 115, name: "Party smile", frames: 4 },
+		"(li)": { i: 114, name: "Lightning", frames: 6 },
+	};
+	const codes = new RegExp(Object.keys(emoticons).sort((a, b) => b.length - a.length)
+		.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g");
+	function emoticon(code) {
+		const e = emoticons[code];
+		let el;
+		if (e.frames) {
+			el = document.createElement("span");
+			el.setAttribute("role", "img");
+			el.style.backgroundImage = `url(emoticons/${e.i}.png)`;
+			el.style.setProperty("--frames", e.frames);
+			if (e.w) el.style.setProperty("--w", `${e.w}px`);
+			if (e.once) el.style.setProperty("--count", 1);
+		} else {
+			el = document.createElement("img");
+			el.src = `emoticons/${e.i}.png`;
+			el.width = el.height = 19;
+		}
+		el.className = "emo";
+		el.setAttribute(e.frames ? "aria-label" : "alt", e.name);
+		el.title = `${e.name} ${code}`;
+		return el;
+	}
 	function line(cls, text) {
 		const div = document.createElement("div");
 		div.className = cls;
-		div.textContent = text;
+		let last = 0;
+		for (const m of text.matchAll(codes)) {
+			div.append(text.slice(last, m.index), emoticon(m[0]));
+			last = m.index + m[0].length;
+		}
+		div.append(text.slice(last));
 		history.appendChild(div);
 		history.scrollTop = history.scrollHeight;
 	}
@@ -417,7 +465,7 @@ wlm-messenger</code></pre>
 				});
 			}
 			document.getElementById("release-note").textContent =
-				`Version ${rel.tag_name.replace(/^v/, "")}. Free and open source. Nothing from Microsoft is included.`;
+				`Version ${rel.tag_name.replace(/^v/, "")}. Free and open source. The downloads contain nothing from Microsoft.`;
 		})
 		.catch(() => {});
 })();

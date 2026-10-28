@@ -161,7 +161,8 @@ python3 re/scripts/wlm_skin.py msgsresdll msgslangdll out/  # DirectUI resources
 
 ## Legal
 
-Windows Live Messenger and its assets are Microsoft's. This repository contains no Microsoft code,
-artwork or sounds: the UI images, icon, emoticons, strings and sounds are only decoded locally from an
-installer you already have. Reverse engineering was done for interoperability with the Escargot
+Windows Live Messenger and its assets are Microsoft's. The apps and their releases contain no
+Microsoft code, artwork or sounds: the UI images, icon, emoticons, strings and sounds are only decoded
+locally from an installer you already have. The one exception is the project page, whose example
+conversation shows ten of Messenger's emoticons (`site/emoticons`) for illustration. Reverse engineering was done for interoperability with the Escargot
 service. The dev server image clones the Escargot server source (CC BY-NC 4.0) at build time.
