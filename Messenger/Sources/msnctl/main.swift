@@ -28,7 +28,7 @@ struct CLI {
 	}
 
 	func makeClient(_ tag: String) -> any IMService {
-		let c: any IMService = matrix ? MatrixClient(homeserver: homeserver) : MessengerClient(config: config)
+		let c: any IMService = matrix ? MatrixClient.throwaway(homeserver: homeserver) : MessengerClient(config: config)
 		c.log = verbose ? { s in FileHandle.standardError.write(Data("[\(tag)] \(s)\n".utf8)) } : nil
 		return c
 	}

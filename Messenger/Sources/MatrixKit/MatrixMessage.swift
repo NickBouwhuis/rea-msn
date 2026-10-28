@@ -82,6 +82,7 @@ public enum MatrixMessage {
 	}
 
 	public static let encryptedNotice = "This message is encrypted, and this version of Messenger can't read it yet."
+	public static let undecryptableNotice = "This message couldn't be decrypted. Verifying this session (Actions ▸ Verify This Session) lets your other sessions share their keys."
 	public static var noticeFormat: TextFormat {
 		var f = TextFormat()
 		f.italic = true

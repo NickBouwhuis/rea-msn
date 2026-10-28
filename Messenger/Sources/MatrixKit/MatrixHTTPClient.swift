@@ -1,3 +1,7 @@
+// The plain client-server API client, for platforms without a matrix-rust-sdk
+// build (Linux, for now). Where the SDK is available, MatrixSDKClient.swift
+// provides MatrixClient instead, with end-to-end encryption.
+#if !canImport(MatrixRustSDK)
 import Foundation
 import MSNKit
 
@@ -5,7 +9,7 @@ import MSNKit
 /// API. Direct chats (m.direct) are the contact list, presence and its
 /// status_msg are the status and personal message, ignored users are the block
 /// list, and a DM invite is "X has added you to their contact list".
-/// Group rooms and end-to-end encrypted rooms are not supported yet.
+/// Group rooms and end-to-end encrypted rooms are not supported.
 @MainActor
 public final class MatrixClient: IMService {
 	public private(set) var state: IMState = .signedOut
@@ -74,6 +78,13 @@ public final class MatrixClient: IMService {
 
 	public init(homeserver: URL? = nil) {
 		self.homeserver = homeserver
+	}
+
+	public static let supportsEncryption = false
+
+	/// The same as init here: this client keeps nothing between runs anyway.
+	public static func throwaway(homeserver: URL?) -> MatrixClient {
+		MatrixClient(homeserver: homeserver)
 	}
 
 	// MARK: - Sign in / out
@@ -706,3 +717,4 @@ public final class MatrixClient: IMService {
 		_ = try await api.call("PUT", "/rooms/\(MatrixAPI.segment(room))/send/m.room.message/\(txn)", body: content)
 	}
 }
+#endif

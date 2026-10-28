@@ -85,6 +85,7 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertEqual(MatrixMessage.text(of: quote, senderName: "Bob"), "> not a reply\n\nkeep it")
 	}
 
+	#if !canImport(MatrixRustSDK)  // MatrixHTTPClient only
 	@MainActor
 	func testDeviceIDIsStablePerAccountAndMachine() {
 		let a = MatrixClient.deviceID(for: "@alice:localhost", host: "mac")
@@ -95,6 +96,14 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertTrue(a.hasPrefix("WLM"))
 		XCTAssertTrue(a.allSatisfy { $0.isUppercase && $0.isASCII })
 	}
+
+	func testSyncFilterAsksOnlyForWhatTheClientUses() {
+		let filter = MatrixClient.filter(timelineLimit: 1)
+		XCTAssertEqual(filter["room"]["timeline"]["limit"].int, 1)
+		XCTAssertEqual(filter["room"]["ephemeral"]["types"], ["m.typing"])
+		XCTAssertEqual(filter["account_data"]["types"], ["m.direct", "m.ignored_user_list"])
+	}
+	#endif
 
 	func testSSORedirectURL() {
 		let api = MatrixAPI(baseURL: URL(string: "https://matrix.example.org")!)
@@ -133,12 +142,5 @@ final class MatrixKitTests: XCTestCase {
 			_ = try await waiting.value
 			XCTFail("wait returned after stop")
 		} catch is CancellationError {}
-	}
-
-	func testSyncFilterAsksOnlyForWhatTheClientUses() {
-		let filter = MatrixClient.filter(timelineLimit: 1)
-		XCTAssertEqual(filter["room"]["timeline"]["limit"].int, 1)
-		XCTAssertEqual(filter["room"]["ephemeral"]["types"], ["m.typing"])
-		XCTAssertEqual(filter["account_data"]["types"], ["m.direct", "m.ignored_user_list"])
 	}
 }

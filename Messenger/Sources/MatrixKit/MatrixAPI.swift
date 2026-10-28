@@ -85,6 +85,13 @@ public struct MatrixAPI: Sendable {
 		throw MatrixError.noHomeserver(serverName)
 	}
 
+	/// The base URL without a trailing slash (well-known and the SDK may add one).
+	private var base: String {
+		var s = baseURL.absoluteString
+		while s.hasSuffix("/") { s.removeLast() }
+		return s
+	}
+
 	/// Percent-encodes a user ID, room ID or event type for use as one path segment.
 	public static func segment(_ s: String) -> String {
 		var allowed = CharacterSet.alphanumerics
@@ -118,7 +125,7 @@ public struct MatrixAPI: Sendable {
 	public func data(_ method: String, _ path: String, query: [String: String] = [:], body: JSON? = nil,
 	                 timeout: TimeInterval = 30) async throws -> Data {
 		let full = path.hasPrefix("/_matrix/") ? path : "/_matrix/client/v3" + path
-		guard var components = URLComponents(string: baseURL.absoluteString + full) else {
+		guard var components = URLComponents(string: base + full) else {
 			throw MatrixError.badResponse("bad URL \(full)")
 		}
 		if !query.isEmpty {
@@ -180,7 +187,7 @@ public struct MatrixAPI: Sendable {
 
 	/// Where to send the browser for SSO; the homeserver comes back to `redirect` with ?loginToken=.
 	public func ssoRedirectURL(returningTo redirect: URL) -> URL {
-		var components = URLComponents(string: baseURL.absoluteString + "/_matrix/client/v3/login/sso/redirect")!
+		var components = URLComponents(string: base + "/_matrix/client/v3/login/sso/redirect")!
 		components.queryItems = [URLQueryItem(name: "redirectUrl", value: redirect.absoluteString)]
 		return components.url!
 	}

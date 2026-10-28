@@ -5,9 +5,10 @@ import MSNKit
 extension CLI {
 	/// e2e against a Matrix homeserver: the same WLM walk-through, with
 	/// Matrix's differences (Busy reads back as Away; there is no "contact is
-	/// offline" failure because the server keeps the message). With a third
-	/// account, also checks that encrypted DMs are shown and refused, not
-	/// answered in the clear.
+	/// offline" failure because the server keeps the message). With
+	/// matrix-rust-sdk, DMs are end-to-end encrypted, which it checks on the
+	/// server. With a third account, also checks a message that can't be
+	/// decrypted: shown as a notice, and never answered in the clear.
 	func matrixE2E(_ idA: String, _ idB: String, _ password: String, encryptedFrom idC: String?) async throws {
 		let a = makeClient("A"), b = makeClient("B")
 		var inbox: [String] = []
@@ -60,7 +61,8 @@ extension CLI {
 				try await step("reset: \(tag) removes \(other)") { try await client.removeContact(other) }
 			}
 		}
-		try await step("A adds B (createRoom is_direct + m.direct)") {
+		let encrypted = MatrixClient.supportsEncryption
+		try await step("A adds B (createRoom is_direct\(encrypted ? " + m.room.encryption" : "") + m.direct)") {
 			try await a.addContact(idB)
 			guard a.contacts[idB]?.isForward == true else { throw MSNPError.unexpected("B not on A's list") }
 		}
@@ -95,6 +97,13 @@ extension CLI {
 		try await step("B → A reply") {
 			await b.sendMessage(to: idA, text: "Hi Alice, it works \(run)")
 			try await waitFor("A receives reply") { received(by: "A", from: idB, "Hi Alice, it works \(run)") }
+		}
+		if encrypted {
+			try await step("the server only has ciphertext (m.room.encrypted)") {
+				let events = try await recentEvents(idB, password, inDMWith: idA)
+				guard events.contains(where: { $0.type == "m.room.encrypted" }) else { throw MSNPError.unexpected("no encrypted events: \(events)") }
+				guard !events.contains(where: { $0.body?.contains(run) == true }) else { throw MSNPError.unexpected("plaintext on the server") }
+			}
 		}
 		try await step("fonts and colours round-trip") {
 			var format = TextFormat()
@@ -140,9 +149,10 @@ extension CLI {
 		print("All steps passed.")
 	}
 
-	/// C (over the raw API, as Element would) opens an encrypted DM with A and
-	/// sends an m.room.encrypted event. A must show a notice for it and refuse
-	/// to reply rather than send plaintext into the room.
+	/// C (over the raw API) opens an encrypted DM with A and sends an
+	/// m.room.encrypted event nobody can decrypt. A must show a notice for it,
+	/// and its reply must not go out in the clear: refused without encryption
+	/// support, encrypted with it.
 	private func encryptedDMCheck(_ a: any IMService, idA: String, idC: String, password: String,
 	                              received: @escaping (String) -> Bool) async throws {
 		var failures: [String] = []
@@ -170,12 +180,24 @@ extension CLI {
 				"sender_key": "x", "session_id": "y",
 			])
 		}
-		try await step("A shows the encrypted message as unreadable") {
-			try await waitFor("encrypted notice") { received(MatrixMessage.encryptedNotice) }
+		let encrypted = MatrixClient.supportsEncryption
+		try await step("A shows the undecryptable message as a notice") {
+			try await waitFor("notice") { received(encrypted ? MatrixMessage.undecryptableNotice : MatrixMessage.encryptedNotice) }
 		}
-		try await step("A refuses to reply in the clear") {
-			await a.sendMessage(to: idC, text: "this must not be sent")
-			try await waitFor("delivery refused", timeout: 5) { failures.contains { $0.contains("end-to-end encrypted") } }
+		if encrypted {
+			try await step("A's reply to C goes out encrypted") {
+				await a.sendMessage(to: idC, text: "a secret reply")
+				try await Task.sleep(nanoseconds: 3_000_000_000)
+				guard failures.isEmpty else { throw MSNPError.unexpected("not delivered: \(failures)") }
+				let events = try await recentEvents(idC, password, inDMWith: idA, room: room)
+				guard events.contains(where: { $0.sender == idA && $0.type == "m.room.encrypted" }),
+				      !events.contains(where: { $0.body == "a secret reply" }) else { throw MSNPError.unexpected("reply not encrypted: \(events)") }
+			}
+		} else {
+			try await step("A refuses to reply in the clear") {
+				await a.sendMessage(to: idC, text: "this must not be sent")
+				try await waitFor("delivery refused", timeout: 5) { failures.contains { $0.contains("end-to-end encrypted") } }
+			}
 		}
 		try await step("reset: C leaves, A removes C") {
 			_ = try await api?.call("POST", "/rooms/\(MatrixAPI.segment(room))/leave", body: [:])
@@ -183,6 +205,28 @@ extension CLI {
 			try await a.removeContact(idC)
 		}
 		a.onEvent = previous
+	}
+
+	/// The last events of `user`'s DM with `peer` (or of `room`), as the server
+	/// stores them, read with a temporary device over the plain API.
+	private func recentEvents(_ user: String, _ password: String, inDMWith peer: String,
+	                          room: String? = nil) async throws -> [(type: String, sender: String, body: String?)] {
+		let base: URL
+		if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: MatrixID.serverName(of: user) ?? "") }
+		var api = MatrixAPI(baseURL: base)
+		api.accessToken = try await api.login(user: user, password: password, deviceID: "WLME2ECHECK", deviceName: "msnctl e2e check").accessToken
+		var id = room
+		if id == nil {
+			let direct = try await api.call("GET", "/user/\(MatrixAPI.segment(user))/account_data/m.direct")
+			id = direct[peer].array.last?.string
+		}
+		var events: [(type: String, sender: String, body: String?)] = []
+		if let id {
+			let chunk = try await api.call("GET", "/rooms/\(MatrixAPI.segment(id))/messages", query: ["dir": "b", "limit": "20"])["chunk"]
+			events = chunk.array.map { ($0["type"].string ?? "", $0["sender"].string ?? "", $0["content"]["body"].string) }
+		}
+		_ = try? await api.call("POST", "/logout", body: [:])
+		return events
 	}
 
 	private func step(_ name: String, _ body: () async throws -> Void) async throws {
@@ -195,7 +239,8 @@ extension CLI {
 		}
 	}
 
-	private func waitFor(_ what: String, timeout: Double = 15, _ cond: () -> Bool) async throws {
+	/// 30 s: with matrix-rust-sdk, presence is polled every 10 s.
+	private func waitFor(_ what: String, timeout: Double = 30, _ cond: () -> Bool) async throws {
 		let deadline = Date().addingTimeInterval(timeout)
 		while !cond() {
 			if Date() > deadline { throw MSNPError.timeout(what) }
