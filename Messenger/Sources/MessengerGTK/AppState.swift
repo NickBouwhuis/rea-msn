@@ -111,7 +111,9 @@ final class AppState {
 		if rememberPassword { SecretStore.set(password, for: email) } else { SecretStore.delete(email) }
 
 		let client = MessengerClient(config: settings.serverConfig)
-		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil { client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered }
+		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
+			client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered
+		}
 		client.onEvent = { [weak self] in self?.handle($0) }
 		client.displayPictureDirectory = Self.dataDirectory.appendingPathComponent("Pictures", isDirectory: true)
 		self.client = client
