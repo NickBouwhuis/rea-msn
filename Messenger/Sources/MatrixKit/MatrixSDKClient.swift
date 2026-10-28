@@ -45,6 +45,7 @@ public final class MatrixClient: IMService {
 	public private(set) var contacts: [String: Contact] = [:]
 	public let groups: [ABGroup] = []
 	public private(set) var isVerified = false
+	public private(set) var deviceID = ""
 
 	public var onEvent: ((IMEvent) -> Void)?
 	public var log: ((String) -> Void)?
@@ -162,7 +163,8 @@ public final class MatrixClient: IMService {
 			try stillSigningIn()
 			self.client = client
 			email = (try? client.userId()) ?? userID
-			log?("[matrix] signed in as \(email), device \((try? client.deviceId()) ?? "?")")
+			deviceID = (try? client.deviceId()) ?? ""
+			log?("[matrix] signed in as \(email), device \(deviceID)")
 			status = initialStatus
 			if let handle = try? client.setDelegate(delegate: AuthErrorListener { [weak self] soft in
 				Task { @MainActor in self?.sessionEnded(soft ? "Please sign in again." : "Your Matrix session has ended. You may have signed it out from another device.") }
@@ -396,7 +398,9 @@ public final class MatrixClient: IMService {
 		// that come only through account data (m.direct) on the way.
 		tasks.append(Task { [weak self] in
 			while !Task.isCancelled {
-				try? await Task.sleep(nanoseconds: 10_000_000_000)
+				// Every 10 s, slower with long lists (about 3 requests a second at most).
+				let contacts = await MainActor.run { self?.contacts.count ?? 0 }
+				try? await Task.sleep(nanoseconds: UInt64(max(10, contacts / 3)) * 1_000_000_000)
 				guard let self else { return }
 				await self.pollPresence()
 				await self.refreshRooms(nil, emit: true)
@@ -714,7 +718,9 @@ public final class MatrixClient: IMService {
 		guard user != email else { return }
 		if invites[user] != nil { return try await respondToAdd(user, allow: true, addToList: true) }
 		if contacts[user]?.isForward != true {
-			if let id = roomPeer.first(where: { $0.value == user })?.key {
+			// Reuse a two-person room with them only if it's encrypted; otherwise
+			// start an encrypted DM, as Element would.
+			if let id = roomPeer.first(where: { $0.value == user && isEncrypted($0.key) })?.key {
 				try await setDirect(id, user, true)
 			} else {
 				_ = try await createDirectRoom(with: user)
@@ -849,13 +855,18 @@ public final class MatrixClient: IMService {
 		if let id = existingRoom(with: peer), let room = rooms[id] { stopTyping(in: room) }
 	}
 
-	/// The room to talk to `user` in: of the rooms with them we're in, one
-	/// they're in too (m.direct's newest first), else the newest listed.
+	/// The room to talk to `user` in, of the rooms with them we're in (m.direct's
+	/// newest first): an encrypted one they're in too, else any they're in,
+	/// else the newest listed.
 	private func existingRoom(with user: String) -> String? {
 		let listed = (direct[user] ?? []).reversed().filter { roomInfos[$0]?.membership == .joined }
 		let others = roomPeer.filter { $0.value == user && !listed.contains($0.key) }.map(\.key)
-		let shared = (listed + others).first { members[$0]?.contains(user) == true }
-		return shared ?? listed.first ?? others.first
+		let shared = (listed + others).filter { members[$0]?.contains(user) == true }
+		return shared.first(where: isEncrypted) ?? shared.first ?? listed.first ?? others.first
+	}
+
+	private func isEncrypted(_ id: String) -> Bool {
+		roomInfos[id]?.encryptionState == .encrypted
 	}
 
 	private func conversationRoom(with peer: String) async throws -> Room {

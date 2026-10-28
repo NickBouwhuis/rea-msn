@@ -145,6 +145,22 @@ extension CLI {
 			guard a2.personalMessage == "Ported with rea + Ghidra" else { throw MSNPError.unexpected("PSM not kept: \(a2.personalMessage)") }
 			a2.signOut()
 		}
+		#if os(macOS)
+		try await step("a remembered session comes back without the password, as the same device") {
+			let store = MemoryMatrixSessionStore()
+			let dir = FileManager.default.temporaryDirectory.appendingPathComponent("msnctl-\(UUID().uuidString)", isDirectory: true)
+			let first = MatrixClient(homeserver: homeserver, store: store, directory: dir)
+			try await first.signIn(email: idA, password: password)
+			let device = first.deviceID
+			first.signOut()  // "Remember me": keeps the session
+			let again = MatrixClient(homeserver: homeserver, store: store, directory: dir)
+			again.keepsSessionOnSignOut = false
+			try await again.signIn(email: idA, password: "")
+			guard again.deviceID == device else { throw MSNPError.unexpected("new device \(again.deviceID), not \(device)") }
+			guard again.contacts[idB]?.isForward == true else { throw MSNPError.unexpected("B missing after restore") }
+			again.signOut()  // and this time log it out
+		}
+		#endif
 		try await Task.sleep(nanoseconds: 500_000_000)  // let the sign-outs reach the server
 		print("All steps passed.")
 	}
@@ -206,6 +222,71 @@ extension CLI {
 		}
 		a.onEvent = previous
 	}
+
+	#if os(macOS)  // matrix-rust-sdk, which has verification, is macOS-only so far
+	/// Signs in and, for `seconds`, accepts verification requests from your
+	/// other sessions, confirming the emoji. On a fresh account this first
+	/// session sets up cross-signing, so it can verify the others.
+	func verifyResponder(_ id: String, _ password: String, seconds: Double) async throws {
+		let client = MatrixClient.throwaway(homeserver: homeserver)
+		client.onVerification = { event in
+			switch event {
+			case let .state(verified):
+				print("this session is \(verified ? "verified" : "not verified")")
+			case let .requested(device):
+				print("verification requested by \(device); accepting")
+				Task { try? await client.acceptVerification() }
+			case let .emojis(emojis):
+				print("emoji: " + emojis.map { "\($0.symbol) \($0.description)" }.joined(separator: ", "))
+				Task { try? await client.confirmVerification(true) }
+			case .finished:
+				print("verification finished")
+			case let .cancelled(why):
+				print("verification cancelled: \(why ?? "")")
+			}
+		}
+		try await client.signIn(email: id, password: password)
+		print("Signed in as \(client.email); waiting \(Int(seconds)) s for requests")
+		try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+		client.signOut()
+	}
+
+	/// Signs in as a new session, asks your other sessions to verify it,
+	/// confirms the emoji and waits until it is verified.
+	func verifyRequester(_ id: String, _ password: String) async throws {
+		let client = MatrixClient.throwaway(homeserver: homeserver)
+		var ready = false, verified = false, cancelled: String?
+		client.onVerification = { event in
+			switch event {
+			case let .state(v):
+				ready = true
+				verified = v
+			case let .emojis(emojis):
+				print("emoji: " + emojis.map { "\($0.symbol) \($0.description)" }.joined(separator: ", "))
+				Task { try? await client.confirmVerification(true) }
+			case .finished:
+				print("verification finished")
+			case let .cancelled(why):
+				cancelled = why ?? "cancelled"
+			case .requested:
+				break
+			}
+		}
+		try await step("new session signs in") { try await client.signIn(email: id, password: password) }
+		try await step("encryption is ready and the session starts unverified") {
+			try await waitFor("verification state") { ready }
+			guard !verified else { throw MSNPError.unexpected("already verified") }
+		}
+		try await step("emoji verification with the other session") {
+			try await client.requestVerification()
+			try await waitFor("verified", timeout: 60) { verified || cancelled != nil }
+			if let cancelled { throw MSNPError.unexpected("verification \(cancelled)") }
+		}
+		client.signOut()
+		try await Task.sleep(nanoseconds: 500_000_000)
+		print("All steps passed.")
+	}
+	#endif
 
 	/// The last events of `user`'s DM with `peer` (or of `room`), as the server
 	/// stores them, read with a temporary device over the plain API.

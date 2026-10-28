@@ -115,6 +115,9 @@ struct MessengerCommands: Commands {
 				}
 			}
 			.disabled(app.phase != .signedIn)
+			Divider()
+			Button("Verify This Session...") { app.verification = .prompt }
+				.disabled(app.phase != .signedIn || !app.sessionUnverified)
 		}
 	}
 }

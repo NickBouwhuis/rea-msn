@@ -75,8 +75,8 @@ struct SignInView: View {
 			.overlay(Rectangle().stroke(Color(rgb: 0xAAB7C7), lineWidth: 1))
 			.padding(EdgeInsets(top: 2, leading: 0, bottom: 8, trailing: 0))
 
-			if matrixMethod == .browser {
-				Text("Sign in opens your web browser, where \(MatrixID.serverName(of: email.lowercased()) ?? "your server") asks for your password.")
+			if let note = passwordNote {
+				Text(note)
 					.font(WLMFont.regular())
 					.foregroundStyle(R.hint)
 					.fixedSize(horizontal: false, vertical: true)
@@ -105,9 +105,9 @@ struct SignInView: View {
 				WLMCheckbox(title: s.string(61288, "Remember me"), isOn: $rememberMe)
 					.padding(.vertical, 3)
 				Spacer().frame(height: 18)
-				WLMCheckbox(title: s.string(61295, "Remember my password"), isOn: $rememberPassword, enabled: matrixMethod != .browser)
+				WLMCheckbox(title: s.string(61295, "Remember my password"), isOn: $rememberPassword, enabled: passwordNote == nil)
 					.padding(.vertical, 3)
-				WLMCheckbox(title: s.string(61298, "Sign me in automatically"), isOn: $auto, enabled: rememberPassword && matrixMethod != .browser)
+				WLMCheckbox(title: s.string(61298, "Sign me in automatically"), isOn: $auto, enabled: rememberPassword && passwordNote == nil)
 					.padding(.vertical, 3)
 			}
 			.padding(.top, 30)
@@ -224,9 +224,19 @@ struct SignInView: View {
 		}
 	}
 
+	/// Shown instead of the password box when a Matrix sign-in doesn't need one.
+	private var passwordNote: String? {
+		let server = MatrixID.serverName(of: email.lowercased()) ?? "your server"
+		switch matrixMethod {
+		case .browser?: return "Sign in opens your web browser, where \(server) asks for your password."
+		case .savedSession?: return "You're already signed in to \(server) on this computer."
+		default: return nil
+		}
+	}
+
 	private func signIn() {
-		let browser = matrixMethod == .browser
-		app.signIn(email: email, password: browser ? "" : password, status: status, rememberMe: rememberMe,
-		           rememberPassword: rememberPassword && !browser, auto: auto && !browser)
+		let noPassword = passwordNote != nil
+		app.signIn(email: email, password: noPassword ? "" : password, status: status, rememberMe: rememberMe,
+		           rememberPassword: rememberPassword && !noPassword, auto: auto && !noPassword)
 	}
 }

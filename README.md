@@ -16,7 +16,7 @@ re/                    rea/Ghidra helpers, challenge oracle, DirectUI RLE decode
 docs/RE-FINDINGS.md    what the binaries do and how each part maps to the ports
 Messenger/             Swift package
   Sources/MSNKit       shared protocol library: MSNP15 NS/SB, Passport RST + MBI, CHL/QRY, ABCH, Storage
-  Sources/MatrixKit    the same client surface over the Matrix client-server API (experimental)
+  Sources/MatrixKit    the same client surface over Matrix (matrix-rust-sdk on macOS; experimental)
   Sources/Messenger    macOS app (SwiftUI/AppKit)
   Sources/MessengerGTK Linux app (GTK 4 via Sources/CGtk)
   Sources/msnctl       CLI: sign in, send messages, run the end-to-end scenario
@@ -121,7 +121,11 @@ supported, and neither are offline messages. See the RE notes for details.
 ## Matrix (experimental)
 
 Sign in with a Matrix ID such as `@you:matrix.org` instead of an e-mail address, and the same
-windows talk to a Matrix homeserver through MatrixKit. The homeserver is found through the server's
+windows talk to a Matrix homeserver through MatrixKit. On macOS that runs on
+[matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-components-swift), the engine Element X
+uses, so conversations are end-to-end encrypted and your existing Element chats work. Linux still
+uses a plain client-server client without encryption, until the SDK is built there. The homeserver
+is found through the server's
 `.well-known`; to set one by hand, use the field under "Connect to" (macOS) or "Matrix homeserver..."
 in the service menu (Linux). When the homeserver signs people in through the browser (SSO, such as
 MAS), the sign-in window notices and drops the password box: "Sign in" opens the homeserver's page in
@@ -139,19 +143,23 @@ onto Matrix like this:
 | Nudge | an `m.emote` ("* Alice just sent you a nudge.") with a namespaced flag |
 | Typing | `m.typing` |
 
-Each machine gets one Matrix session per account ("Windows Live Messenger (hostname)"), and signing
-out logs that session out.
+On macOS, Messenger is a session (device) on your account like any other. It keeps the session in the
+Keychain, with its encryption keys in a passphrase-protected store under
+`~/Library/Application Support/MessengerMac/Matrix`, so it stays the same session, and stays
+verified, between launches. "Sign out" keeps it when "Remember me" is ticked, and logs it out
+otherwise. After the first sign-in Messenger asks you to verify the session, by comparing emoji with
+Element or another of your sessions (either side can start), or with your recovery key (Actions ▸
+Verify This Session). Until then, other people's apps may not share message keys with it.
+Messages that can't be decrypted yet show a notice; the message follows if its key arrives later.
 
 Not supported yet:
-- End-to-end encryption. Element encrypts new DMs by default, so messages in those rooms show as
-  "This message is encrypted", and Messenger won't reply in them. DMs that Messenger starts are
-  unencrypted, so they work with any client.
 - Group rooms: only one-to-one chats are shown.
 - Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
   Synapse still offer for existing clients.
-- Session verification, which needs end-to-end encryption.
 - Message history: like WLM, a conversation starts empty.
-- Servers with presence turned off: contacts there always look Offline, but you can still message them.
+- Presence comes from polling every 10 seconds (the SDK doesn't expose presence events). On servers
+  with presence turned off, contacts always look Offline, but you can still message them.
+- Linux: encryption and verification (see above).
 
 ## Testing
 
@@ -168,13 +176,17 @@ directions, typing, nudge, offline delivery failure, block/unblock, and roaming 
 Seeded test accounts are `alice@`, `bob@` and `carol@example.com`, all with password `123456`.
 
 The Matrix backend has the same scenario against a local Synapse (`@alice`, `@bob` and
-`@carol:localhost`, password `123456`). Carol's account checks that an encrypted DM shows as
-unreadable and that Messenger refuses to reply in it in plain text:
+`@carol:localhost`, password `123456`). On macOS it also checks, over the plain API, that the server
+only ever stores ciphertext. Carol's account sends a message nobody can decrypt, which must show as a
+notice and be answered encrypted (on Linux: refused). `verify-wait` and `verify` run both sides of
+emoji verification between two sessions of a fresh account:
 
 ```sh
 docker compose -f devserver/matrix/docker-compose.yml up -d     # Synapse on :8008
 cd Messenger
 swift run msnctl --matrix http://127.0.0.1:8008 e2e @alice:localhost @bob:localhost 123456 @carol:localhost
+swift run msnctl --matrix http://127.0.0.1:8008 verify-wait @dave:localhost 123456 &   # first session
+swift run msnctl --matrix http://127.0.0.1:8008 verify @dave:localhost 123456          # asks to be verified
 ```
 `msnctl --escargot check you@escargot.chat -` is a read-only sign-in summary against the live
 service (Appear Offline; `-` reads the password from `$MSN_PASSWORD`).
@@ -182,7 +194,8 @@ service (Appear Offline; `-` reads the password from `$MSN_PASSWORD`).
 Developer hooks for both apps: `MESSENGER_SERVER=local|escargot|<host>` and
 `MESSENGER_AUTOLOGIN=alice@example.com:123456` sign in directly, and `MESSENGER_DEBUG=1` prints the
 MSNP wire log. For Matrix, `MESSENGER_MATRIX_HOMESERVER=http://127.0.0.1:8008` and
-`MESSENGER_AUTOLOGIN=@alice:localhost:123456`. `MSNKIT_POSIX_TRANSPORT=1` makes macOS use the POSIX socket transport that Linux uses.
+`MESSENGER_AUTOLOGIN=@alice:localhost:123456`; `MESSENGER_MATRIX_EPHEMERAL=1` keeps the session in
+memory and a temporary folder rather than the Keychain. `MSNKIT_POSIX_TRANSPORT=1` makes macOS use the POSIX socket transport that Linux uses.
 
 ### Linux in a VMPal VM
 

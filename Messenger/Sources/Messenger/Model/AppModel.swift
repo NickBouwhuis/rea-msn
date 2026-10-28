@@ -31,6 +31,29 @@ final class AppModel: ObservableObject {
 	@Published private(set) var groups: [ABGroup] = []
 	@Published var addRequests: [AddRequest] = []
 	@Published var alert: String?
+	/// Matrix: this session isn't cross-signed yet, and the verification dialog's step.
+	@Published private(set) var sessionUnverified = false
+	@Published var verification: Verification? {
+		didSet { verificationWindow.update() }
+	}
+	private var promptedVerification = false
+	private lazy var verificationWindow = VerificationWindow(app: self)
+
+	enum Verification: Equatable {
+		case prompt
+		case waiting(String)
+		/// Another of your sessions asks to verify this one.
+		case incoming(String)
+		case emojis([Emoji])
+		case recoveryKey
+		case done
+		case failed(String)
+	}
+
+	struct Emoji: Equatable, Hashable {
+		let symbol: String
+		let name: String
+	}
 
 	private(set) var client: (any IMService)?
 	private(set) var conversations: [String: ConversationModel] = [:]
@@ -63,8 +86,15 @@ final class AppModel: ObservableObject {
 		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
 		let client: any IMService
 		if MatrixID.isUserID(email) {
-			let matrix = MatrixClient(homeserver: settings.matrixHomeserverURL)
+			// MESSENGER_MATRIX_EPHEMERAL=1 (development): keep nothing, not even in the Keychain.
+			let matrix = ProcessInfo.processInfo.environment["MESSENGER_MATRIX_EPHEMERAL"] != nil
+				? MatrixClient.throwaway(homeserver: settings.matrixHomeserverURL)
+				: MatrixClient(homeserver: settings.matrixHomeserverURL)
 			matrix.openURL = { NSWorkspace.shared.open($0) }
+			// Without "Remember me", signing out also logs this device out.
+			matrix.keepsSessionOnSignOut = rememberMe
+			matrix.onVerification = { [weak self] in self?.handleVerification($0) }
+			promptedVerification = false
 			client = matrix
 		} else {
 			client = MessengerClient(config: settings.serverConfig)
@@ -96,6 +126,8 @@ final class AppModel: ObservableObject {
 	}
 
 	func signOut() {
+		verification = nil
+		sessionUnverified = false
 		client?.signOut()
 		client = nil
 		windows.closeAll()
@@ -227,6 +259,76 @@ final class AppModel: ObservableObject {
 		client?.closeConversation(with: peer)
 	}
 
+	// MARK: - Matrix session verification
+
+	private var matrix: MatrixClient? { client as? MatrixClient }
+
+	private func handleVerification(_ event: MatrixClient.VerificationEvent) {
+		switch event {
+		case let .state(verified):
+			sessionUnverified = !verified
+			if verified {
+				if verification != nil { verification = .done }
+			} else if !promptedVerification {
+				promptedVerification = true
+				verification = .prompt
+			}
+		case let .requested(device):
+			verification = .incoming(device)
+			NSApp.requestUserAttention(.informationalRequest)
+		case let .emojis(list):
+			verification = .emojis(list.map { Emoji(symbol: $0.symbol, name: $0.description) })
+		case .finished:
+			verification = .done
+		case let .cancelled(why):
+			if verification != nil, verification != .done {
+				verification = .failed(why ?? "The verification was cancelled.")
+			}
+		}
+	}
+
+	func verifyWithOtherSession() {
+		verification = .waiting("Open Element (or another app you're signed in to) and accept the verification request there.")
+		Task {
+			do { try await matrix?.requestVerification() } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func acceptIncomingVerification() {
+		verification = .waiting("Waiting for your other session...")
+		Task {
+			do { try await matrix?.acceptVerification() } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func confirmEmojis(_ match: Bool) {
+		verification = match ? .waiting("Waiting for your other session to confirm...")
+			: .failed("The emoji didn't match, so this session wasn't verified.")
+		Task {
+			do { try await matrix?.confirmVerification(match) } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func recover(_ key: String) {
+		verification = .waiting("Checking your recovery key...")
+		Task {
+			do {
+				try await matrix?.recover(recoveryKey: key)
+				verification = .done
+			} catch {
+				verification = .failed("That recovery key didn't work. (\(error.localizedDescription))")
+			}
+		}
+	}
+
+	func closeVerification() {
+		switch verification {
+		case .waiting?, .incoming?, .emojis?: Task { await matrix?.cancelVerification() }
+		default: break
+		}
+		verification = nil
+	}
+
 	// MARK: - Events
 
 	private func refreshContacts() {
@@ -288,6 +390,8 @@ final class AppModel: ObservableObject {
 		case let .conversation(peer, event):
 			handleConversation(peer, event)
 		case let .signedOut(reason):
+			verification = nil
+			sessionUnverified = false
 			windows.closeAll()
 			conversations.removeAll()
 			contacts = []

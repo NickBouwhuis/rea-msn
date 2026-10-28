@@ -267,6 +267,12 @@ func run() async {
 			let nudge = args.contains("--nudge")
 			let rest = args.filter { $0 != "--nudge" }
 			try await cli.say(rest[1], rest[2], to: rest[3], rest[4], nudge: nudge, linger: Double(rest.count > 5 ? rest[5] : "5") ?? 5)
+		#if os(macOS)
+		case "verify-wait" where cli.matrix && args.count >= 3:
+			try await cli.verifyResponder(args[1], password(args[2]), seconds: Double(args.count > 3 ? args[3] : "90") ?? 90)
+		case "verify" where cli.matrix && args.count == 3:
+			try await cli.verifyRequester(args[1], password(args[2]))
+		#endif
 		case "e2e" where cli.matrix && (args.count == 4 || args.count == 5):
 			try await cli.matrixE2E(args[1], args[2], args[3], encryptedFrom: args.count == 5 ? args[4] : nil)
 		case "e2e" where args.count == 4:
