@@ -76,25 +76,29 @@ jobs:
           if-no-files-found: error
 
   ubuntu:
-    name: Ubuntu .deb (${{ matrix.arch }})
+    name: Ubuntu ${{ matrix.ubuntu }} .deb (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
+        # One package per release: sonames (libxml2) differ between them.
         include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    # Built on the oldest supported Ubuntu, so the package's Depends hold for newer ones.
+          - { ubuntu: "24.04", arch: amd64, runner: ubuntu-24.04 }
+          - { ubuntu: "24.04", arch: arm64, runner: ubuntu-24.04-arm }
+          - { ubuntu: "26.04", arch: amd64, runner: ubuntu-24.04, container: "ubuntu:26.04" }
+          - { ubuntu: "26.04", arch: arm64, runner: ubuntu-24.04-arm, container: "ubuntu:26.04" }
     runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev binutils \
-            libcurl4-openssl-dev libxml2-dev libsqlite3-dev libncurses-dev libedit-dev \
-            libpython3-dev libz3-dev libstdc++-13-dev libgcc-13-dev zlib1g-dev pkg-config gnupg2 unzip
+          SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev binutils g++ git \
+            curl ca-certificates gnupg2 unzip tzdata pkg-config libcurl4-openssl-dev libxml2-dev \
+            libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev
+      - uses: actions/checkout@v4
       - name: Install Swift ${{ env.SWIFT_VERSION }}
         run: |
           curl -fsSL -O "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz"
@@ -105,7 +109,7 @@ jobs:
           swift --version
       - name: Version
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(git rev-parse --short HEAD)"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(echo "$GITHUB_SHA" | cut -c1-7)"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
       - name: Test
         working-directory: Messenger
@@ -118,12 +122,13 @@ jobs:
           linux/scripts/package-deb.sh
       - name: Install check
         run: |
-          sudo apt-get install -y ./build/*.deb
+          SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
+          $SUDO apt-get install -y ./build/*.deb
           ! ldd /usr/bin/wlm-messenger | grep "not found"
           dpkg -L wlm-messenger
       - uses: actions/upload-artifact@v4
         with:
-          name: ubuntu-deb-${{ matrix.arch }}
+          name: ubuntu-${{ matrix.ubuntu }}-deb-${{ matrix.arch }}
           path: build/*.deb
           if-no-files-found: error
 

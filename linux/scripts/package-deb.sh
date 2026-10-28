@@ -1,9 +1,11 @@
 #!/bin/sh
-# Builds build/wlm-messenger_$VERSION_<arch>.deb: MessengerGTK with the Swift
-# runtime linked in statically (the system provides only GTK 4, libcurl and
-# libxml2), a launcher entry, and the asset importer as wlm-messenger-import.
+# Builds build/wlm-messenger_$VERSION~<distro>_<arch>.deb: MessengerGTK with the
+# Swift runtime linked in statically (the system provides only GTK 4, libcurl
+# and libxml2), a launcher entry, and the asset importer as wlm-messenger-import.
 # No Microsoft assets are included; users import them from their own installer.
-# Needs dpkg-dev; run on the oldest Ubuntu you target (the Depends follow it).
+# Needs dpkg-dev. The Depends come from the release it's built on, and sonames
+# differ between releases (libxml2.so.2 on 24.04, .so.16 on 26.04), so build
+# once per Ubuntu release; the version carries it, e.g. 1.2.3~ubuntu24.04.
 #   VERSION=1.2.3 linux/scripts/package-deb.sh
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -13,6 +15,8 @@ SCRATCH="${SCRATCH:-$PKG/.build}"
 VERSION="${VERSION:-0.0.0}"
 MAINTAINER="${MAINTAINER:-NickBouwhuis <NickBouwhuis@users.noreply.github.com>}"
 ARCH="$(dpkg --print-architecture)"
+DIST="$(. /etc/os-release && echo "$ID$VERSION_ID")"
+DEB_VERSION="$VERSION~$DIST"
 NAME=wlm-messenger
 APP_ID=chat.messenger.wlm81
 STAGE="$(mktemp -d)"   # package root
@@ -55,7 +59,7 @@ DEPENDS="$(cd "$SHLIBS" && dpkg-shlibdeps -O "$STAGE/usr/bin/$NAME" 2>/dev/null 
 install -d "$STAGE/DEBIAN"
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: $NAME
-Version: $VERSION
+Version: $DEB_VERSION
 Architecture: $ARCH
 Maintainer: $MAINTAINER
 Installed-Size: $(du -sk "$STAGE/usr" | cut -f1)
@@ -70,7 +74,7 @@ Description: Windows Live Messenger 8.1-style client for the Escargot (MSN) serv
 EOF
 
 mkdir -p "$ROOT/build"
-DEB="$ROOT/build/${NAME}_${VERSION}_$ARCH.deb"
+DEB="$ROOT/build/${NAME}_${DEB_VERSION}_$ARCH.deb"
 dpkg-deb --build --root-owner-group "$STAGE" "$DEB" >/dev/null
 echo "Packaged $DEB"
 echo "Depends: $DEPENDS"

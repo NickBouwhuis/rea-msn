@@ -25,8 +25,8 @@ devserver/             Docker image of the open-source Escargot server, for loca
 
 ## Install a release
 
-Download the DMG (macOS 14+, Apple Silicon and Intel) or the `.deb` for your architecture (Ubuntu
-24.04 or newer, amd64 or arm64) from the repository's Releases page. Neither contains anything from
+Download the DMG (macOS 14+, Apple Silicon and Intel) or the `.deb` for your Ubuntu release and
+architecture (`~ubuntu24.04` or `~ubuntu26.04`, amd64 or arm64) from the repository's Releases page. Neither contains anything from
 Microsoft. After installing, import the look, emoticons and sounds from your own copy of the Escargot
 WLM 8.1 installer (`escargot-wlm-8.1.0178-en.msi`):
 
@@ -35,7 +35,7 @@ WLM 8.1 installer (`escargot-wlm-8.1.0178-en.msi`):
 /Applications/Messenger.app/Contents/Resources/import/Messenger/scripts/import-wlm-assets.sh ~/Downloads/escargot-wlm-8.1.0178-en.msi
 
 # Ubuntu (the .deb recommends 7zip, python3 and ffmpeg)
-sudo apt install ./wlm-messenger_*_amd64.deb
+sudo apt install ./wlm-messenger_*~ubuntu24.04_amd64.deb
 wlm-messenger-import ~/Downloads/escargot-wlm-8.1.0178-en.msi
 ```
 
@@ -46,8 +46,9 @@ app once, then allow it under System Settings › Privacy & Security › "Open A
 
 `.github/workflows/build.yml` runs on every push and pull request. It runs the unit tests, then builds:
 - the universal DMG on macOS (`Messenger/scripts/package-dmg.sh`)
-- the `.deb`s on Ubuntu 24.04 amd64 and arm64 (`linux/scripts/package-deb.sh`, with the Swift
-  runtime statically linked; the oldest supported Ubuntu sets the package's dependencies)
+- a `.deb` per Ubuntu release (24.04, 26.04) and architecture (amd64, arm64), using
+  `linux/scripts/package-deb.sh` with the Swift runtime statically linked. Each release needs its own
+  package because system library versions differ (24.04 has `libxml2.so.2`, 26.04 `libxml2.so.16`).
 
 The packages are uploaded as workflow artifacts. Pushing a tag such as `v0.1.0` also publishes them
 as a GitHub release. To sign and notarize the DMG, add the repository secrets listed at the top of
