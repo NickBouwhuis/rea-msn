@@ -55,6 +55,9 @@ public struct Contact: Identifiable, Hashable {
 	public var lists: MSNList = []
 	public var groupIDs: [String] = []
 	public var capabilities: UInt32 = 0
+	/// Encoded image (PNG/JPEG); nil shows the default tile. MSNP would need
+	/// the P2P stack for these, so only MatrixKit fills it in.
+	public var displayPicture: Data?
 
 	public init(email: String, displayName: String? = nil) {
 		self.email = email.lowercased()

@@ -146,9 +146,9 @@ struct ConversationView: View {
 	/// youusertile (top) and meusertile (bottom), 96pt with the tile border.
 	private var pictures: some View {
 		VStack {
-			UserTile(seed: convo.peer)
+			UserTile(seed: convo.peer, picture: app.contact(convo.peer)?.displayPicture)
 			Spacer()
-			UserTile(seed: app.myEmail)
+			UserTile(seed: app.myEmail, picture: app.myPicture)
 				.padding(.bottom, 4)
 		}
 		.frame(width: 104)

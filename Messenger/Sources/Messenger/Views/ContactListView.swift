@@ -267,7 +267,7 @@ private struct MeArea: View {
 
 	var body: some View {
 		HStack(alignment: .top, spacing: 0) {
-			UserTile(seed: app.myEmail, size: 48)
+			UserTile(seed: app.myEmail, picture: app.myPicture, size: 48)
 				.padding(.trailing, 5)
 			VStack(alignment: .leading, spacing: 0) {
 				StatusMenu(current: app.myStatus, pick: app.setStatus) {
@@ -365,7 +365,7 @@ struct AddedYouSheet: View {
 	var body: some View {
 		VStack(alignment: .leading, spacing: 12) {
 			HStack(spacing: 10) {
-				UserTile(seed: request.email, size: 40)
+				UserTile(seed: request.email, picture: app.contact(request.email)?.displayPicture, size: 40)
 				VStack(alignment: .leading, spacing: 2) {
 					Text("\(request.displayName) (\(request.email))").font(.system(size: 12, weight: .semibold)).foregroundStyle(WLM.ink)
 					Text("has added you to his or her contact list.").font(.system(size: 12)).foregroundStyle(WLM.ink)

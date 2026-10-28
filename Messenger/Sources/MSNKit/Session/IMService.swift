@@ -16,6 +16,8 @@ public protocol IMService: AnyObject {
 	var displayName: String { get }
 	var personalMessage: String { get }
 	var status: Presence { get }
+	/// Your display picture as an encoded image; nil shows the default tile.
+	var displayPicture: Data? { get }
 	var contacts: [String: Contact] { get }
 	var groups: [ABGroup] { get }
 	var onEvent: ((IMEvent) -> Void)? { get set }
@@ -50,4 +52,7 @@ public extension IMService {
 	}
 }
 
-extension MessengerClient: IMService {}
+extension MessengerClient: IMService {
+	/// Display pictures travel over MSNP P2P, which this port doesn't implement.
+	public var displayPicture: Data? { nil }
+}

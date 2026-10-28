@@ -14,6 +14,7 @@ public final class MatrixClient: IMService {
 	public private(set) var displayName = ""
 	public private(set) var personalMessage = ""
 	public private(set) var status: Presence = .offline
+	public private(set) var displayPicture: Data?
 	public private(set) var contacts: [String: Contact] = [:]
 	public let groups: [ABGroup] = []
 	public private(set) var deviceID = ""
@@ -56,6 +57,10 @@ public final class MatrixClient: IMService {
 	/// Inviter → the DM room they invited us to.
 	private var invites: [String: String] = [:]
 	private var names: [String: String] = [:]
+	/// User → avatar mxc:// URL, and mxc:// URL → thumbnail (empty when the download failed).
+	private var avatarURLs: [String: String] = [:]
+	private var pictures: [String: Data] = [:]
+	private var myAvatarURL: String?
 	private var presence: [String: Presence] = [:]
 	private var statusMessages: [String: String] = [:]
 	/// Room → the contact a conversation there is with.
@@ -130,7 +135,7 @@ public final class MatrixClient: IMService {
 			try stillSigningIn()
 			apply(initial, initial: true)
 			await loadProfile(personalMessage: psm)
-			await loadNames(Array(contacts.keys) + Array(invites.keys))
+			await loadProfiles(Array(contacts.keys) + Array(invites.keys))
 			rebuildContacts(emit: false)
 			onEvent?(.contactListLoaded)
 			try await publishPresence()
@@ -379,9 +384,14 @@ public final class MatrixClient: IMService {
 		case "m.room.encryption":
 			encrypted.insert(roomID)
 		case "m.room.member":
-			if let user = e["state_key"].string, user != email, let name = e["content"]["displayname"].string, !name.isEmpty {
-				names[user] = name
+			guard let user = e["state_key"].string, e["content"]["membership"].string == "join" else { break }
+			let avatar = e["content"]["avatar_url"].string
+			if user == email {
+				myAvatarURL = avatar
+				break
 			}
+			if let name = e["content"]["displayname"].string, !name.isEmpty { names[user] = name }
+			avatarURLs[user] = avatar
 		default:
 			break
 		}
@@ -438,10 +448,13 @@ public final class MatrixClient: IMService {
 			c.lists = l
 			c.status = presence[user] ?? .offline
 			c.personalMessage = statusMessages[user] ?? ""
+			c.displayPicture = picture(avatarURLs[user])
 			next[user] = c
 		}
 		let old = contacts
 		contacts = next
+		displayPicture = picture(myAvatarURL)
+		fetchPictures()
 		guard emit else { return }
 		for (user, c) in next where old[user] != c {
 			onEvent?(.contactUpdated(c, previousStatus: old[user]?.status ?? .offline))
@@ -455,10 +468,32 @@ public final class MatrixClient: IMService {
 		names[user] ?? MatrixID.localpart(of: user)
 	}
 
+	private func picture(_ mxc: String?) -> Data? {
+		mxc.flatMap { pictures[$0] }.flatMap { $0.isEmpty ? nil : $0 }
+	}
+
+	/// Downloads avatars nobody has fetched yet, then shows them.
+	private func fetchPictures() {
+		guard let api else { return }
+		let wanted = Set(contacts.keys.compactMap { avatarURLs[$0] } + [myAvatarURL].compactMap { $0 })
+		for mxc in wanted where pictures[mxc] == nil {
+			pictures[mxc] = Data()  // in flight; stays empty if the download fails
+			Task {
+				guard let data = try? await api.thumbnail(mxc), !data.isEmpty, self.api != nil else { return }
+				self.pictures[mxc] = data
+				let mine = mxc == self.myAvatarURL
+				self.rebuildContacts(emit: true)
+				if mine { self.onEvent?(.profileChanged) }
+			}
+		}
+	}
+
 	private func loadProfile(personalMessage psm: String?) async {
 		guard let api else { return }
 		let me = MatrixAPI.segment(email)
-		displayName = (try? await api.call("GET", "/profile/\(me)"))?["displayname"].string ?? MatrixID.localpart(of: email)
+		let profile = try? await api.call("GET", "/profile/\(me)")
+		displayName = profile?["displayname"].string ?? MatrixID.localpart(of: email)
+		myAvatarURL = profile?["avatar_url"].string
 		if let psm {
 			personalMessage = psm
 		} else {
@@ -466,19 +501,22 @@ public final class MatrixClient: IMService {
 		}
 	}
 
-	/// Profile display names for people no member event has named yet.
-	private func loadNames(_ users: [String]) async {
+	/// Profile names and avatars for people no member event has described yet.
+	private func loadProfiles(_ users: [String]) async {
 		guard let api else { return }
-		let missing = Set(users).subtracting(names.keys)
-		let found = await withTaskGroup(of: (String, String?).self) { group in
+		let missing = Set(users).filter { names[$0] == nil || avatarURLs[$0] == nil }
+		let found = await withTaskGroup(of: (String, JSON?).self) { group in
 			for user in missing {
-				group.addTask { (user, try? await api.call("GET", "/profile/\(MatrixAPI.segment(user))")["displayname"].string) }
+				group.addTask { (user, try? await api.call("GET", "/profile/\(MatrixAPI.segment(user))")) }
 			}
-			var out: [String: String] = [:]
-			for await (user, name) in group { if let name, !name.isEmpty { out[user] = name } }
+			var out: [String: JSON] = [:]
+			for await (user, profile) in group { if let profile { out[user] = profile } }
 			return out
 		}
-		names.merge(found) { current, _ in current }
+		for (user, profile) in found {
+			if names[user] == nil, let name = profile["displayname"].string, !name.isEmpty { names[user] = name }
+			if avatarURLs[user] == nil { avatarURLs[user] = profile["avatar_url"].string }
+		}
 	}
 
 	// MARK: - Profile
@@ -525,7 +563,7 @@ public final class MatrixClient: IMService {
 				_ = try await directRoom(with: user)
 			}
 		}
-		await loadNames([user])
+		await loadProfiles([user])
 		rebuildContacts(emit: true)
 	}
 

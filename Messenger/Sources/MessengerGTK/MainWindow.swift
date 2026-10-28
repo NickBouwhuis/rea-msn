@@ -16,6 +16,7 @@ final class MainWindow {
 	private var emailEntry: Ptr!
 	private var passwordEntry: Ptr!
 	private var passwordLabel: Ptr!
+	private var mePicture: Ptr?
 	/// Replaces the password box when a Matrix homeserver signs in through the browser.
 	private var browserNote: Ptr!
 	private var matrixMethod: MatrixClient.SignInMethod?
@@ -199,16 +200,22 @@ final class MainWindow {
 		return button(row, css: ["wlm-flat"], action)
 	}
 
-	private func userTile(size: Int32) -> Ptr {
+	private func userTile(size: Int32, picture data: Data? = nil) -> Ptr {
+		userTileParts(size: size, picture: data).frame
+	}
+
+	/// The tile and its picture, for tiles whose picture changes later (setPicture).
+	private func userTileParts(size: Int32, picture data: Data? = nil) -> (frame: Ptr, picture: Ptr) {
 		let path = skin.image(size > 64 ? R.defaultTileLarge : R.defaultTileSmall)
 		let p = picture(path, size: (size, size))
+		if data != nil { setPicture(p, data: data, fallback: path) }
 		// A horizontal frame: a vertical box would measure the picture's
 		// height at the full column width (GtkPicture keeps aspect ratio).
 		expand(p)
 		let frame = hbox(0, [p], css: ["wlm-tile"])
 		align(frame, h: GTK_ALIGN_START, v: GTK_ALIGN_START)
 		expand(frame)
-		return frame
+		return (frame, p)
 	}
 
 	private func signIn() {
@@ -270,7 +277,9 @@ final class MainWindow {
 		// MeArea: tile, name ▾ (status), personal message, service toolbar.
 		let me = hbox(5)
 		margins(me, top: 4, start: 12, bottom: 4, end: 10)
-		append(me, userTile(size: 48))
+		let meTile = userTileParts(size: 48)
+		mePicture = meTile.picture
+		append(me, meTile.frame)
 		let meText = vbox(0)
 		expand(meText, h: true)
 		meName = hbox(3)
@@ -337,6 +346,7 @@ final class MainWindow {
 	private var psmPlaceholder: String { skin.string(61130, "<Enter a personal message>") }
 
 	private func refreshMe() {
+		if let mePicture { setPicture(mePicture, data: state.myPicture, fallback: skin.image(R.defaultTileSmall)) }
 		removeAllChildren(meName)
 		append(meName, RichText.line(state.myName.isEmpty ? state.myEmail : state.myName, css: ["wlm-bold"]))
 		append(meName, label("(\(state.myStatus.displayName))", css: ["wlm-label"]))
@@ -504,7 +514,7 @@ final class MainWindow {
 		let (w, _) = Chrome.window(app: nil, width: 420, height: 230)
 		let body = vbox(8)
 		margins(body, top: 12, start: 16, bottom: 12, end: 16)
-		append(body, hbox(10, [userTile(size: 48), vbox(2, [
+		append(body, hbox(10, [userTile(size: 48, picture: state.contact(req.email)?.displayPicture), vbox(2, [
 			label("\(req.name) (\(req.email))", css: ["wlm-bold"]),
 			label("has added you to his or her contact list.", css: ["wlm-label"]),
 		])]))

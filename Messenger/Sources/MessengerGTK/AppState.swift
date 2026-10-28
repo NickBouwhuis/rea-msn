@@ -83,6 +83,7 @@ final class AppState {
 	private(set) var myName = ""
 	private(set) var myMessage = ""
 	private(set) var myStatus: Presence = .offline
+	private(set) var myPicture: Data?
 	var addRequests: [(email: String, name: String)] = []
 
 	/// Listeners the windows register.
@@ -154,6 +155,7 @@ final class AppState {
 		for w in conversations.values { w.close() }
 		conversations.removeAll()
 		contacts = []
+		myPicture = nil
 		phase = .signedOut
 		notify(onPhase)
 	}
@@ -239,6 +241,7 @@ final class AppState {
 		myName = client.displayName
 		myMessage = client.personalMessage
 		myStatus = client.status
+		myPicture = client.displayPicture
 	}
 
 	private func handle(_ event: MessengerClient.Event) {
@@ -286,6 +289,7 @@ final class AppState {
 			for w in conversations.values { w.close() }
 			conversations.removeAll()
 			contacts = []
+			myPicture = nil
 			client = nil
 			phase = .signedOut
 			signInError = reason

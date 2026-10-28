@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
 	@Published private(set) var myName = ""
 	@Published private(set) var myMessage = ""
 	@Published private(set) var myStatus: Presence = .offline
+	@Published private(set) var myPicture: Data?
 	@Published private(set) var contacts: [Contact] = []
 	@Published private(set) var groups: [ABGroup] = []
 	@Published var addRequests: [AddRequest] = []
@@ -100,6 +101,7 @@ final class AppModel: ObservableObject {
 		windows.closeAll()
 		conversations.removeAll()
 		contacts = []
+		myPicture = nil
 		addRequests = []
 		phase = .signedOut
 		settings.signInAutomatically = false
@@ -240,6 +242,7 @@ final class AppModel: ObservableObject {
 		myName = client.displayName
 		myMessage = client.personalMessage
 		myStatus = client.status
+		myPicture = client.displayPicture
 	}
 
 	private func handle(_ event: MessengerClient.Event) {
@@ -288,6 +291,7 @@ final class AppModel: ObservableObject {
 			windows.closeAll()
 			conversations.removeAll()
 			contacts = []
+			myPicture = nil
 			client = nil
 			phase = .signedOut
 			signInError = reason

@@ -95,6 +95,28 @@ public struct MatrixAPI: Sendable {
 	/// `path` is either a full `/_matrix/...` path or one relative to `/_matrix/client/v3`.
 	public func call(_ method: String, _ path: String, query: [String: String] = [:], body: JSON? = nil,
 	                 timeout: TimeInterval = 30) async throws -> JSON {
+		let reply = try await data(method, path, query: query, body: body, timeout: timeout)
+		return (try? JSON(data: reply)) ?? .null
+	}
+
+	/// A display-picture-sized thumbnail of an mxc:// URL, through authenticated
+	/// media (v1.11), or the older unauthenticated endpoint on servers without it.
+	public func thumbnail(_ mxc: String, size: Int = 96) async throws -> Data {
+		guard mxc.hasPrefix("mxc://") else { throw MatrixError.badResponse("not an mxc:// URL: \(mxc)") }
+		let parts = mxc.dropFirst("mxc://".count).split(separator: "/", maxSplits: 1).map(String.init)
+		guard parts.count == 2 else { throw MatrixError.badResponse("bad mxc:// URL: \(mxc)") }
+		let path = "/\(Self.segment(parts[0]))/\(Self.segment(parts[1]))"
+		let query = ["width": String(size), "height": String(size), "method": "crop"]
+		do {
+			return try await data("GET", "/_matrix/client/v1/media/thumbnail" + path, query: query)
+		} catch MatrixError.server(let status, _, _) where status == 404 || status == 400 {
+			return try await data("GET", "/_matrix/media/v3/thumbnail" + path, query: query)
+		}
+	}
+
+	/// The raw response body of a request; non-2xx statuses throw MatrixError.server.
+	public func data(_ method: String, _ path: String, query: [String: String] = [:], body: JSON? = nil,
+	                 timeout: TimeInterval = 30) async throws -> Data {
 		let full = path.hasPrefix("/_matrix/") ? path : "/_matrix/client/v3" + path
 		guard var components = URLComponents(string: baseURL.absoluteString + full) else {
 			throw MatrixError.badResponse("bad URL \(full)")
@@ -117,8 +139,8 @@ public struct MatrixAPI: Sendable {
 			let (data, response) = try await session.data(for: req)
 			let http = response as? HTTPURLResponse
 			let status = http?.statusCode ?? 0
+			if (200..<300).contains(status) { return data }
 			let json = (try? JSON(data: data)) ?? .null
-			if (200..<300).contains(status) { return json }
 			// M_LIMIT_EXCEEDED: servers rate-limit presence (Synapse: one change per
 			// 10 s) and messages; wait as told, a few times, rather than fail.
 			if status == 429, attempt < 4 {

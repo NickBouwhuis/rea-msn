@@ -20,6 +20,8 @@ final class ConversationWindow {
 	private let skin = Skin.shared
 	private let state = AppState.shared
 	private var format = TextFormat()
+	private var peerPicture: Ptr?
+	private var myPicture: Ptr?
 
 	init(peer: String) {
 		self.peer = peer
@@ -72,11 +74,12 @@ final class ConversationWindow {
 		append(body, left)
 
 		let pictures = vbox(0)
-		append(pictures, Self.tile(Skin.shared))
+		let peerTile = Self.tile(Skin.shared)
+		append(pictures, peerTile.frame)
 		append(pictures, spacer(v: true))
 		let me = Self.tile(Skin.shared)
-		margins(me, bottom: 4)
-		append(pictures, me)
+		margins(me.frame, bottom: 4)
+		append(pictures, me.frame)
 		append(body, pictures)
 		append(content, body)
 
@@ -88,6 +91,9 @@ final class ConversationWindow {
 		gtk_window_set_child(c(window), c(content))
 
 		// Wiring that needs self.
+		peerPicture = peerTile.picture
+		myPicture = me.picture
+		refreshPictures()
 		for (id, tip) in R.format {
 			append(formatBar, button(picture(skin.image(id)), css: ["wlm-flat"], tooltip: tip) { [weak self] in
 				guard let self else { return }
@@ -124,12 +130,19 @@ final class ConversationWindow {
 		insert("Never give out your password or credit card number in an instant message conversation.\n", markup: false, muted: true)
 	}
 
-	private static func tile(_ skin: Skin) -> Ptr {
+	private static func tile(_ skin: Skin) -> (frame: Ptr, picture: Ptr) {
 		let p = picture(skin.image(R.defaultTileLarge), size: (96, 96))
 		expand(p)
 		let frame = hbox(0, [p], css: ["wlm-tile"])
 		expand(frame)
-		return frame
+		return (frame, p)
+	}
+
+	/// Display pictures: the contact's on top, yours below.
+	private func refreshPictures() {
+		let fallback = skin.image(R.defaultTileLarge)
+		if let peerPicture { setPicture(peerPicture, data: state.contact(peer)?.displayPicture, fallback: fallback) }
+		if let myPicture { setPicture(myPicture, data: state.myPicture, fallback: fallback) }
 	}
 
 	var isActive: Bool { gtk_window_is_active(c(window)) != 0 }
@@ -138,6 +151,7 @@ final class ConversationWindow {
 	func close() { gtk_window_destroy(c(window)) }
 
 	func refreshHeader() {
+		refreshPictures()
 		let name = state.name(of: peer)
 		gtk_window_set_title(c(window), name)
 		if let titleBox, let first = gtk_widget_get_first_child(c(titleBox)) {

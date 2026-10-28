@@ -145,6 +145,20 @@ func menuItem(_ title: String, _ action: @escaping () -> Void) -> Ptr {
 }
 
 /// A picture shown at its natural pixel size (skin resources are 96 DPI art).
+/// Shows an encoded image (a display picture) in a GtkPicture, or the file at `fallback` without one.
+func setPicture(_ p: Ptr, data: Data?, fallback: String?) {
+	if let data, !data.isEmpty {
+		let bytes = data.withUnsafeBytes { g_bytes_new($0.baseAddress, gsize($0.count)) }
+		defer { g_bytes_unref(bytes) }
+		if let texture = gdk_texture_new_from_bytes(bytes, nil) {
+			gtk_picture_set_paintable(c(p), texture)
+			g_object_unref(UnsafeMutableRawPointer(texture))
+			return
+		}
+	}
+	gtk_picture_set_filename(c(p), fallback)
+}
+
 func picture(_ path: String?, size: (Int32, Int32)? = nil, css: [String] = []) -> Ptr {
 	let p: Ptr
 	if let path, FileManager.default.fileExists(atPath: path) {
