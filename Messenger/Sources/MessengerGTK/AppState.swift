@@ -1,11 +1,14 @@
 import CGtk
 import Foundation
+import MatrixKit
 import MSNKit
 
 struct Settings: Codable {
 	enum Server: String, Codable { case escargot, local, custom }
 	var server: Server = .escargot
 	var customHost = "127.0.0.1"
+	/// For @user:server sign-ins; nil finds the homeserver through the server's .well-known.
+	var matrixHomeserver: String?
 	var rememberedAccounts: [String] = []
 	var lastAccount: String?
 	var rememberPassword = false
@@ -21,6 +24,10 @@ struct Settings: Codable {
 			let base = URL(string: "http://\(customHost):8081")!
 			return ServerConfig(nsHost: customHost, loginBaseURL: base, contactsBaseURL: base)
 		}
+	}
+
+	var matrixHomeserverURL: URL? {
+		matrixHomeserver.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : URL(string: $0) }
 	}
 
 	var serverName: String {
@@ -69,7 +76,7 @@ final class AppState {
 	var settings = Settings.load() { didSet { settings.save() } }
 	private(set) var phase: Phase = .signedOut
 	var signInError: String?
-	private(set) var client: MessengerClient?
+	private(set) var client: (any IMService)?
 	private(set) var contacts: [Contact] = []
 	private(set) var groups: [ABGroup] = []
 	private(set) var myEmail = ""
@@ -105,7 +112,10 @@ final class AppState {
 		settings = s
 		if rememberPassword { SecretStore.set(password, for: email) } else { SecretStore.delete(email) }
 
-		let client = MessengerClient(config: settings.serverConfig)
+		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
+		let client: any IMService = MatrixID.isUserID(email)
+			? MatrixClient(homeserver: settings.matrixHomeserverURL)
+			: MessengerClient(config: settings.serverConfig)
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil { client.log = { print($0) } }
 		client.onEvent = { [weak self] in self?.handle($0) }
 		self.client = client
@@ -161,7 +171,7 @@ final class AppState {
 		run { try await $0.respondToAdd(email, allow: allow, addToList: allow && add) }
 	}
 
-	private func run(_ op: @escaping (MessengerClient) async throws -> Void) {
+	private func run(_ op: @escaping (any IMService) async throws -> Void) {
 		guard let client else { return }
 		Task {
 			do { try await op(client) } catch { self.alert(error.localizedDescription) }

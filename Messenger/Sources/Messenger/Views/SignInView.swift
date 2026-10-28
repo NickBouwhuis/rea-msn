@@ -147,6 +147,13 @@ struct SignInView: View {
 				TextField("Notification server host", text: $app.settings.customNSHost)
 				TextField("HTTPS base URL", text: $app.settings.customHTTPBase)
 			}
+			Divider()
+			Text("Sign in with a Matrix ID (@you:matrix.org) to use Matrix instead.")
+				.fixedSize(horizontal: false, vertical: true)
+			TextField("Homeserver URL (blank: find it automatically)", text: Binding(
+				get: { app.settings.matrixHomeserver ?? "" },
+				set: { app.settings.matrixHomeserver = $0.isEmpty ? nil : $0 }
+			))
 		}
 		.font(WLMFont.regular())
 		.padding(12)

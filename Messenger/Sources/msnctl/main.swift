@@ -1,4 +1,5 @@
 import Foundation
+import MatrixKit
 import MSNKit
 
 // msnctl — exercise MSNKit without the GUI.
@@ -8,10 +9,16 @@ import MSNKit
 //   PASSWORD "-" reads $MSN_PASSWORD
 //   msnctl [--local] [-v] say EMAIL PASSWORD TO TEXT [SECONDS] [--nudge]
 //   msnctl [--local] [-v] e2e EMAIL_A EMAIL_B PASSWORD      two-client end-to-end scenario
+//   --matrix [URL] signs in to a Matrix homeserver instead (IDs like @alice:localhost); the URL
+//   skips .well-known discovery. e2e then takes an optional third ID for the encryption check:
+//   msnctl --matrix http://127.0.0.1:8008 e2e @alice:localhost @bob:localhost 123456 @carol:localhost
 
 @MainActor
 struct CLI {
 	var config = ServerConfig.localDev
+	/// --matrix: use MatrixKit; `homeserver` nil discovers it from the user ID.
+	var matrix = false
+	var homeserver: URL?
 	var verbose = false
 	/// `login` replies "echo: …" to incoming IMs only with --echo (never on real accounts by default).
 	var echo = false
@@ -20,8 +27,8 @@ struct CLI {
 		if verbose { FileHandle.standardError.write(Data((s + "\n").utf8)) }
 	}
 
-	func makeClient(_ tag: String) -> MessengerClient {
-		let c = MessengerClient(config: config)
+	func makeClient(_ tag: String) -> any IMService {
+		let c: any IMService = matrix ? MatrixClient(homeserver: homeserver) : MessengerClient(config: config)
 		c.log = verbose ? { s in FileHandle.standardError.write(Data("[\(tag)] \(s)\n".utf8)) } : nil
 		return c
 	}
@@ -242,6 +249,9 @@ func run() async {
 			let h = args.removeFirst()
 			let base = URL(string: "http://\(h):8081")!
 			cli.config = ServerConfig(nsHost: h, loginBaseURL: base, contactsBaseURL: base)
+		case "--matrix":
+			cli.matrix = true
+			if let url = args.first, url.hasPrefix("http") { cli.homeserver = URL(string: args.removeFirst()) }
 		case "-v": cli.verbose = true
 		case "--echo": cli.echo = true
 		default: break
@@ -257,10 +267,12 @@ func run() async {
 			let nudge = args.contains("--nudge")
 			let rest = args.filter { $0 != "--nudge" }
 			try await cli.say(rest[1], rest[2], to: rest[3], rest[4], nudge: nudge, linger: Double(rest.count > 5 ? rest[5] : "5") ?? 5)
+		case "e2e" where cli.matrix && (args.count == 4 || args.count == 5):
+			try await cli.matrixE2E(args[1], args[2], args[3], encryptedFrom: args.count == 5 ? args[4] : nil)
 		case "e2e" where args.count == 4:
 			try await cli.e2e(args[1], args[2], args[3])
 		default:
-			print("usage: msnctl [--local|--escargot] [-v] check EMAIL PASSWORD [SECONDS] | login EMAIL PASSWORD [--echo] | say EMAIL PASSWORD TO TEXT [SECONDS] [--nudge] | e2e EMAIL_A EMAIL_B PASSWORD")
+			print("usage: msnctl [--local|--escargot|--matrix [URL]] [-v] check EMAIL PASSWORD [SECONDS] | login EMAIL PASSWORD [--echo] | say EMAIL PASSWORD TO TEXT [SECONDS] [--nudge] | e2e EMAIL_A EMAIL_B PASSWORD")
 			exit(2)
 		}
 		exit(0)

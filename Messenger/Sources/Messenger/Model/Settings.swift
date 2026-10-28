@@ -19,6 +19,8 @@ struct AppSettings: Codable, Equatable {
 	var customNSHost = "msnmsgr.escargot.chat"
 	var customNSPort: UInt16 = 1863
 	var customHTTPBase = "https://msnmsgr.escargot.chat"
+	/// For @user:server sign-ins; nil finds the homeserver through the server's .well-known.
+	var matrixHomeserver: String?
 
 	var rememberedAccounts: [String] = []
 	var lastAccount: String?
@@ -40,6 +42,10 @@ struct AppSettings: Codable, Equatable {
 			let base = URL(string: customHTTPBase) ?? ServerConfig.escargot.loginBaseURL
 			return ServerConfig(nsHost: customNSHost, nsPort: customNSPort, loginBaseURL: base, contactsBaseURL: base)
 		}
+	}
+
+	var matrixHomeserverURL: URL? {
+		matrixHomeserver.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : URL(string: $0) }
 	}
 
 	private static let key = "settings.v1"

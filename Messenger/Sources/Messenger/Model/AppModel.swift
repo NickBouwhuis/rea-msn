@@ -1,4 +1,5 @@
 import AppKit
+import MatrixKit
 import MSNKit
 import SwiftUI
 
@@ -30,7 +31,7 @@ final class AppModel: ObservableObject {
 	@Published var addRequests: [AddRequest] = []
 	@Published var alert: String?
 
-	private(set) var client: MessengerClient?
+	private(set) var client: (any IMService)?
 	private(set) var conversations: [String: ConversationModel] = [:]
 	lazy var windows = ConversationWindows(app: self)
 	let toasts = ToastCenter()
@@ -57,7 +58,10 @@ final class AppModel: ObservableObject {
 		settings = s
 		if rememberPassword { Keychain.setPassword(password, for: email) } else { Keychain.deletePassword(for: email) }
 
-		let client = MessengerClient(config: settings.serverConfig)
+		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
+		let client: any IMService = MatrixID.isUserID(email)
+			? MatrixClient(homeserver: settings.matrixHomeserverURL)
+			: MessengerClient(config: settings.serverConfig)
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
 			client.log = { print($0) }
 		}
@@ -129,8 +133,8 @@ final class AppModel: ObservableObject {
 	func addContact(_ email: String) {
 		guard let client else { return }
 		let email = email.trimmingCharacters(in: .whitespaces).lowercased()
-		guard email.contains("@"), email.contains(".") else {
-			alert = "Please type a valid e-mail address, such as someone@example.com."
+		guard MatrixID.isUserID(email) || (email.contains("@") && email.contains(".")) else {
+			alert = "Please type a valid e-mail address, such as someone@example.com, or a Matrix ID, such as @someone:matrix.org."
 			return
 		}
 		Task {

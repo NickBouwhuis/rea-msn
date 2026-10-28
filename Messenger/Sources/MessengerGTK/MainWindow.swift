@@ -437,6 +437,17 @@ final class MainWindow {
 				}
 			})
 		}
+		append(items, menuItem("Matrix homeserver...") { [weak self] in
+			guard let self else { return }
+			popdown(pop)
+			Dialog.prompt(title: "Matrix homeserver",
+			              message: "Sign in with a Matrix ID (@you:matrix.org) to use Matrix. Leave this blank to find the homeserver automatically.",
+			              placeholder: "https://matrix.example.org", text: self.state.settings.matrixHomeserver ?? "",
+			              ok: "OK", parent: self.window) { url in
+				let u = url.trimmingCharacters(in: .whitespaces)
+				self.state.settings.matrixHomeserver = u.isEmpty ? nil : u
+			}
+		})
 		align(picker, h: GTK_ALIGN_START)
 		return picker
 	}

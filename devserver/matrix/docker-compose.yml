@@ -1,0 +1,19 @@
+# A throwaway Synapse homeserver for the Matrix backend (MatrixKit).
+# server_name is "localhost"; the first start registers @alice, @bob and
+# @carol:localhost with password 123456, like the Escargot devserver.
+#
+#   docker compose -f devserver/matrix/docker-compose.yml up -d
+#   swift run msnctl --matrix http://127.0.0.1:8008 e2e @alice:localhost @bob:localhost 123456
+services:
+  synapse:
+    image: matrixdotorg/synapse:v1.164.1
+    entrypoint: ["/bin/sh", "/dev-entrypoint.sh"]
+    ports:
+      - "127.0.0.1:8008:8008"
+    volumes:
+      - ./entrypoint.sh:/dev-entrypoint.sh:ro
+      - ./dev.yaml:/dev.yaml:ro
+      - synapse-data:/data
+
+volumes:
+  synapse-data:

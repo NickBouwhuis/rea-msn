@@ -1,0 +1,17 @@
+
+# devserver/matrix: appended to the generated homeserver.yaml. Presence is on
+# (some public servers turn it off), and the rate limits are loose enough for
+# repeated msnctl e2e runs.
+presence:
+  enabled: true
+rc_message: {per_second: 1000, burst_count: 1000}
+rc_login:
+  address: {per_second: 1000, burst_count: 1000}
+  account: {per_second: 1000, burst_count: 1000}
+  failed_attempts: {per_second: 1000, burst_count: 1000}
+rc_joins:
+  local: {per_second: 1000, burst_count: 1000}
+rc_invites:
+  per_room: {per_second: 1000, burst_count: 1000}
+  per_user: {per_second: 1000, burst_count: 1000}
+  per_issuer: {per_second: 1000, burst_count: 1000}

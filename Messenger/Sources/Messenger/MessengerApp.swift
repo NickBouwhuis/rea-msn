@@ -33,14 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			if let icon = Skin.shared.appIcon { NSApp.applicationIconImage = icon }
 		}
 
-		// Development hooks: MESSENGER_SERVER=local|escargot, MESSENGER_AUTOLOGIN=email:password
+		// Development hooks: MESSENGER_SERVER=local|escargot, MESSENGER_MATRIX_HOMESERVER=url,
+		// MESSENGER_AUTOLOGIN=email:password or @user:server:password
 		let env = ProcessInfo.processInfo.environment
 		Task { @MainActor in
 			let app = AppModel.shared
 			if let server = env["MESSENGER_SERVER"].flatMap(AppSettings.ServerChoice.init(rawValue:)) {
 				app.settings.server = server
 			}
-			if let auto = env["MESSENGER_AUTOLOGIN"], let colon = auto.firstIndex(of: ":") {
+			if let homeserver = env["MESSENGER_MATRIX_HOMESERVER"] { app.settings.matrixHomeserver = homeserver }
+			if let auto = env["MESSENGER_AUTOLOGIN"], let colon = auto.hasPrefix("@") ? auto.lastIndex(of: ":") : auto.firstIndex(of: ":") {
 				app.signIn(email: String(auto[..<colon]), password: String(auto[auto.index(after: colon)...]),
 				           status: .online, rememberMe: true, rememberPassword: false, auto: false)
 			}

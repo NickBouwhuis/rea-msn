@@ -2,13 +2,17 @@
 import PackageDescription
 
 // One package, two front ends over the shared MSNKit protocol library:
-// a SwiftUI/AppKit app on macOS and a GTK4 app on Linux.
+// a SwiftUI/AppKit app on macOS and a GTK4 app on Linux. MatrixKit puts the
+// same client surface (MSNKit's IMService) over the Matrix client-server API.
 var targets: [Target] = [
-	.executableTarget(name: "msnctl", dependencies: ["MSNKit"]),
+	.target(name: "MatrixKit", dependencies: ["MSNKit"]),
+	.executableTarget(name: "msnctl", dependencies: ["MSNKit", "MatrixKit"]),
 	.testTarget(name: "MSNKitTests", dependencies: ["MSNKit"]),
+	.testTarget(name: "MatrixKitTests", dependencies: ["MatrixKit", "MSNKit"]),
 ]
 var products: [Product] = [
 	.library(name: "MSNKit", targets: ["MSNKit"]),
+	.library(name: "MatrixKit", targets: ["MatrixKit"]),
 	.executable(name: "msnctl", targets: ["msnctl"]),
 ]
 var dependencies: [Package.Dependency] = []
@@ -18,13 +22,13 @@ dependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", "
 targets += [
 	.target(name: "MSNKit", dependencies: [.product(name: "Crypto", package: "swift-crypto")]),
 	.systemLibrary(name: "CGtk", pkgConfig: "gtk4", providers: [.apt(["libgtk-4-dev"])]),
-	.executableTarget(name: "MessengerGTK", dependencies: ["MSNKit", "CGtk"]),
+	.executableTarget(name: "MessengerGTK", dependencies: ["MSNKit", "MatrixKit", "CGtk"]),
 ]
 products.append(.executable(name: "MessengerGTK", targets: ["MessengerGTK"]))
 #else
 targets += [
 	.target(name: "MSNKit"),
-	.executableTarget(name: "Messenger", dependencies: ["MSNKit"]),
+	.executableTarget(name: "Messenger", dependencies: ["MSNKit", "MatrixKit"]),
 ]
 products.append(.executable(name: "Messenger", targets: ["Messenger"]))
 #endif

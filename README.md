@@ -16,6 +16,7 @@ re/                    rea/Ghidra helpers, challenge oracle, DirectUI RLE decode
 docs/RE-FINDINGS.md    what the binaries do and how each part maps to the ports
 Messenger/             Swift package
   Sources/MSNKit       shared protocol library: MSNP15 NS/SB, Passport RST + MBI, CHL/QRY, ABCH, Storage
+  Sources/MatrixKit    the same client surface over the Matrix client-server API (experimental)
   Sources/Messenger    macOS app (SwiftUI/AppKit)
   Sources/MessengerGTK Linux app (GTK 4 via Sources/CGtk)
   Sources/msnctl       CLI: sign in, send messages, run the end-to-end scenario
@@ -23,6 +24,7 @@ Messenger/             Swift package
   scripts/             macOS: build-app.sh, package-dmg.sh, import-wlm-assets.sh, import-wlm-sounds.sh
 linux/scripts/         Linux: import-wlm-assets.sh, install.sh, package-deb.sh, vmpal (VMPal CLI wrapper)
 devserver/             Docker image of the open-source Escargot server, for local testing
+devserver/matrix/      a throwaway Synapse homeserver for testing MatrixKit
 ```
 
 ## Install a release
@@ -116,6 +118,36 @@ another host.
 The port has no P2P stack, so display pictures, file transfer, winks, voice and video are not
 supported, and neither are offline messages. See the RE notes for details.
 
+## Matrix (experimental)
+
+Sign in with a Matrix ID such as `@you:matrix.org` instead of an e-mail address, and the same
+windows talk to a Matrix homeserver through MatrixKit. The homeserver is found through the server's
+`.well-known`; to set one by hand, use the field under "Connect to" (macOS) or "Matrix homeserver..."
+in the service menu (Linux). WLM concepts map onto Matrix like this:
+
+| WLM | Matrix |
+| --- | --- |
+| Contact list | users in `m.direct` with a DM room you're in, plus the other person in any two-person room |
+| "X has added you" | an invite to a direct chat (`is_direct`); declining leaves the room and blocks |
+| Block | `m.ignored_user_list` |
+| Status | presence: Online is `online`, Appear Offline is `offline`, the away-type statuses are `unavailable` (shown as Away) |
+| Personal message | presence `status_msg` |
+| Messages | `m.room.message`; font and colour go out as HTML, and the exact WLM font in a namespaced key |
+| Nudge | an `m.emote` ("* Alice just sent you a nudge.") with a namespaced flag |
+| Typing | `m.typing` |
+
+Each machine gets one Matrix session per account ("Windows Live Messenger (hostname)"), and signing
+out logs that session out.
+
+Not supported yet:
+- End-to-end encryption. Element encrypts new DMs by default, so messages in those rooms show as
+  "This message is encrypted", and Messenger won't reply in them. DMs that Messenger starts are
+  unencrypted, so they work with any client.
+- Group rooms: only one-to-one chats are shown.
+- Homeservers that only allow browser (OIDC) sign-in. matrix.org still accepts passwords.
+- Message history: like WLM, a conversation starts empty.
+- Servers with presence turned off: contacts there always look Offline, but you can still message them.
+
 ## Testing
 
 ```sh
@@ -129,12 +161,23 @@ The e2e scenario signs in two clients and checks each WLM feature end to end:
 sign-in, a rejected bad password, presence, name and PSM, contact add and approval, IM in both
 directions, typing, nudge, offline delivery failure, block/unblock, and roaming after re-sign-in.
 Seeded test accounts are `alice@`, `bob@` and `carol@example.com`, all with password `123456`.
+
+The Matrix backend has the same scenario against a local Synapse (`@alice`, `@bob` and
+`@carol:localhost`, password `123456`). Carol's account checks that an encrypted DM shows as
+unreadable and that Messenger refuses to reply in it in plain text:
+
+```sh
+docker compose -f devserver/matrix/docker-compose.yml up -d     # Synapse on :8008
+cd Messenger
+swift run msnctl --matrix http://127.0.0.1:8008 e2e @alice:localhost @bob:localhost 123456 @carol:localhost
+```
 `msnctl --escargot check you@escargot.chat -` is a read-only sign-in summary against the live
 service (Appear Offline; `-` reads the password from `$MSN_PASSWORD`).
 
 Developer hooks for both apps: `MESSENGER_SERVER=local|escargot|<host>` and
 `MESSENGER_AUTOLOGIN=alice@example.com:123456` sign in directly, and `MESSENGER_DEBUG=1` prints the
-MSNP wire log. `MSNKIT_POSIX_TRANSPORT=1` makes macOS use the POSIX socket transport that Linux uses.
+MSNP wire log. For Matrix, `MESSENGER_MATRIX_HOMESERVER=http://127.0.0.1:8008` and
+`MESSENGER_AUTOLOGIN=@alice:localhost:123456`. `MSNKIT_POSIX_TRANSPORT=1` makes macOS use the POSIX socket transport that Linux uses.
 
 ### Linux in a VMPal VM
 
