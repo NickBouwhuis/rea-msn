@@ -50,6 +50,9 @@ Icon=$APP_ID
 Categories=Network;InstantMessaging;
 StartupWMClass=$APP_ID
 EOF
+for size in 16 32 48 256; do
+	install -D -m 644 "$ROOT/assets/icon/$size.png" "$STAGE/usr/share/icons/hicolor/${size}x$size/apps/$APP_ID.png"
+done
 install -D -m 644 "$ROOT/README.md" "$STAGE/usr/share/doc/$NAME/README.md"
 
 mkdir -p "$SHLIBS/debian"

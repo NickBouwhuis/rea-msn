@@ -242,7 +242,7 @@ footer p { max-width: 80ch; }
 						</div>
 					</details>
 				</div>
-				<p class="release-note" id="release-note">Free and open source. The downloads contain nothing from Microsoft.</p>
+				<p class="release-note" id="release-note">Free and open source for macOS 14+ and Ubuntu 24.04+.</p>
 			</div>
 			<figure class="convo" id="convo" aria-label="Example conversation between Bob on Ubuntu and Alice on macOS" style="margin:0">
 				<div class="title" aria-hidden="true">
@@ -271,7 +271,7 @@ footer p { max-width: 80ch; }
 <main class="wrap">
 	<section id="start" aria-labelledby="start-h">
 		<h2 id="start-h">Get started</h2>
-		<p class="prose">The app ships no Microsoft code, artwork or sounds. You import them from Escargot's copy of the original installer, so it looks the way you remember.</p>
+		<p class="prose">Apart from its icon, the app ships no Microsoft artwork, code or sounds. You import them from Escargot's copy of the original installer, so it looks the way you remember.</p>
 		<ol class="steps">
 			<li>
 				<h3>Install the app</h3>
@@ -357,7 +357,7 @@ wlm-messenger</code></pre>
 
 <footer>
 	<div class="wrap">
-		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community. The emoticons and display pictures in the example conversation are Messenger's originals, © Microsoft, shown for illustration.</p>
+		<p>rea-msn is a fan project and is not affiliated with or endorsed by Microsoft. Windows Live Messenger is a trademark of Microsoft Corporation; the app uses Microsoft's look only from an installer you provide. It connects to <a href="https://escargot.chat">Escargot</a>, which is run by its own community. The app icon, and the emoticons and display pictures in the example conversation, are Messenger's originals, © Microsoft.</p>
 	</div>
 </footer>
 
@@ -464,7 +464,7 @@ wlm-messenger</code></pre>
 				});
 			}
 			document.getElementById("release-note").textContent =
-				`Version ${rel.tag_name.replace(/^v/, "")}. Free and open source. The downloads contain nothing from Microsoft.`;
+				`Version ${rel.tag_name.replace(/^v/, "")}. Free and open source for macOS 14+ and Ubuntu 24.04+.`;
 		})
 		.catch(() => {});
 })();

@@ -1,7 +1,6 @@
 #!/bin/sh
 # Builds MessengerGTK (release) and installs it for the current user:
-# ~/.local/bin/wlm-messenger and a launcher entry. import-wlm-assets.sh adds
-# the Messenger icon along with the skin.
+# ~/.local/bin/wlm-messenger, a launcher entry and the Messenger icon.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PKG="$HERE/../../Messenger"
@@ -12,6 +11,11 @@ APP_ID=chat.messenger.wlm81
 swift build -c release --package-path "$PKG" --scratch-path "$SCRATCH" --product MessengerGTK
 mkdir -p "$HOME/.local/bin"
 install -m 755 "$SCRATCH/release/MessengerGTK" "$HOME/.local/bin/wlm-messenger"
+
+for size in 16 32 48 256; do
+	install -D -m 644 "$HERE/../../assets/icon/$size.png" "$DATA/icons/hicolor/${size}x$size/apps/$APP_ID.png"
+done
+gtk4-update-icon-cache -q -t -f "$DATA/icons/hicolor" 2>/dev/null || true
 
 mkdir -p "$DATA/applications"
 cat > "$DATA/applications/$APP_ID.desktop" <<DESKTOP

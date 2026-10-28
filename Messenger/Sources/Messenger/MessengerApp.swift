@@ -25,6 +25,12 @@ struct MessengerApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+	func applicationWillFinishLaunching(_ notification: Notification) {
+		// WLM's skin is light-only: in Dark Mode, controls would draw light
+		// text into its white fields.
+		NSApp.appearance = NSAppearance(named: .aqua)
+	}
+
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		// SwiftPM executables launch as background processes unless told otherwise.
 		NSApp.setActivationPolicy(.regular)
