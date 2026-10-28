@@ -43,7 +43,8 @@ final class AppModel: ObservableObject {
 
 	func signIn(email: String, password: String, status: Presence, rememberMe: Bool, rememberPassword: Bool, auto: Bool) {
 		let email = email.trimmingCharacters(in: .whitespaces).lowercased()
-		guard !email.isEmpty, !password.isEmpty else {
+		// Matrix homeservers may sign in through the browser instead, with no password here.
+		guard !email.isEmpty, !password.isEmpty || MatrixID.isUserID(email) else {
 			signInError = "Please type your e-mail address and password."
 			return
 		}
@@ -56,12 +57,17 @@ final class AppModel: ObservableObject {
 		if rememberMe, !s.rememberedAccounts.contains(email) { s.rememberedAccounts.insert(email, at: 0) }
 		if !rememberMe { s.rememberedAccounts.removeAll { $0 == email } }
 		settings = s
-		if rememberPassword { Keychain.setPassword(password, for: email) } else { Keychain.deletePassword(for: email) }
+		if !rememberPassword { Keychain.deletePassword(for: email) } else if !password.isEmpty { Keychain.setPassword(password, for: email) }
 
 		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
-		let client: any IMService = MatrixID.isUserID(email)
-			? MatrixClient(homeserver: settings.matrixHomeserverURL)
-			: MessengerClient(config: settings.serverConfig)
+		let client: any IMService
+		if MatrixID.isUserID(email) {
+			let matrix = MatrixClient(homeserver: settings.matrixHomeserverURL)
+			matrix.openURL = { NSWorkspace.shared.open($0) }
+			client = matrix
+		} else {
+			client = MessengerClient(config: settings.serverConfig)
+		}
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
 			client.log = { print($0) }
 		}
@@ -72,7 +78,9 @@ final class AppModel: ObservableObject {
 		Task {
 			do {
 				try await client.signIn(email: email, password: password, status: status)
+				NSApp.activate(ignoringOtherApps: true)  // back from the browser after a browser sign-in
 			} catch {
+				guard self.client === client else { return }  // cancelled
 				self.client = nil
 				self.phase = .signedOut
 				self.signInError = Self.friendly(error)

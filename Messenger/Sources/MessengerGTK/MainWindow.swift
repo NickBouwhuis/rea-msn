@@ -1,5 +1,6 @@
 import CGtk
 import Foundation
+import MatrixKit
 import MSNKit
 
 /// The Messenger main window: sign-in (UIFILE 947) and contact list
@@ -14,6 +15,11 @@ final class MainWindow {
 	// Sign-in widgets
 	private var emailEntry: Ptr!
 	private var passwordEntry: Ptr!
+	private var passwordLabel: Ptr!
+	/// Replaces the password box when a Matrix homeserver signs in through the browser.
+	private var browserNote: Ptr!
+	private var matrixMethod: MatrixClient.SignInMethod?
+	private var methodCheck: Task<Void, Never>?
 	private var statusLabel: Ptr!
 	private var statusPopover: Ptr!
 	private var rememberMe: Ptr!
@@ -91,11 +97,18 @@ final class MainWindow {
 		margins(emailRow, top: 2, bottom: 8)
 		append(form, emailRow)
 
-		append(form, label(skin.string(61282, "Password:"), css: ["wlm-label"]))
+		passwordLabel = label(skin.string(61282, "Password:"), css: ["wlm-label"])
+		append(form, passwordLabel)
 		passwordEntry = entry(password: true)
 		margins(passwordEntry, top: 2, bottom: 5)
 		on(passwordEntry, "activate") { [weak self] in self?.signIn() }
 		append(form, passwordEntry)
+		browserNote = label("", css: ["wlm-label"], wrap: true)
+		gtk_label_set_max_width_chars(c(browserNote), 30)
+		margins(browserNote, bottom: 5)
+		visible(browserNote, false)
+		append(form, browserNote)
+		on(emailEntry, "changed") { [weak self] in self?.checkSignInMethod() }
 
 		let statusRow = hbox(4)
 		append(statusRow, label(skin.string(61286, "Status:"), css: ["wlm-label"]))
@@ -199,8 +212,34 @@ final class MainWindow {
 	}
 
 	private func signIn() {
-		state.signIn(email: text(of: emailEntry), password: text(of: passwordEntry), status: signInStatus,
-		             rememberMe: isActive(rememberMe), rememberPassword: isActive(rememberPassword))
+		let browser = matrixMethod == .browser
+		state.signIn(email: text(of: emailEntry), password: browser ? "" : text(of: passwordEntry), status: signInStatus,
+		             rememberMe: isActive(rememberMe), rememberPassword: isActive(rememberPassword) && !browser)
+	}
+
+	/// For a Matrix ID, asks its homeserver whether it takes passwords or signs in through the browser.
+	private func checkSignInMethod() {
+		methodCheck?.cancel()
+		showSignInMethod(nil)
+		let id = text(of: emailEntry).trimmingCharacters(in: .whitespaces).lowercased()
+		guard MatrixID.isUserID(id) else { return }
+		let homeserver = state.settings.matrixHomeserverURL
+		methodCheck = Task { [weak self] in
+			try? await Task.sleep(nanoseconds: 500_000_000)  // wait for typing to pause
+			guard !Task.isCancelled, let method = try? await MatrixClient.signInMethod(for: id, homeserver: homeserver),
+			      !Task.isCancelled else { return }
+			self?.showSignInMethod(method, server: MatrixID.serverName(of: id))
+		}
+	}
+
+	private func showSignInMethod(_ method: MatrixClient.SignInMethod?, server: String? = nil) {
+		matrixMethod = method
+		let browser = method == .browser
+		visible(passwordLabel, !browser)
+		visible(passwordEntry, !browser)
+		visible(browserNote, browser)
+		setText(browserNote, "Sign in opens your web browser, where \(server ?? "your server") asks for your password.")
+		gtk_widget_set_sensitive(c(rememberPassword), browser ? 0 : 1)
 	}
 
 	private func phaseChanged() {

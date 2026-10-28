@@ -1,4 +1,7 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import MSNKit
 @testable import MatrixKit
 
@@ -91,6 +94,45 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertEqual(a.count, 10)
 		XCTAssertTrue(a.hasPrefix("WLM"))
 		XCTAssertTrue(a.allSatisfy { $0.isUppercase && $0.isASCII })
+	}
+
+	func testSSORedirectURL() {
+		let api = MatrixAPI(baseURL: URL(string: "https://matrix.example.org")!)
+		let url = api.ssoRedirectURL(returningTo: URL(string: "http://127.0.0.1:5000/callback/abc")!)
+		XCTAssertEqual(url.absoluteString,
+		               "https://matrix.example.org/_matrix/client/v3/login/sso/redirect?redirectUrl=http://127.0.0.1:5000/callback/abc")
+	}
+
+	func testLoopbackRedirectReturnsTheLoginToken() async throws {
+		let redirect = try LoopbackRedirect()
+		XCTAssertEqual(redirect.callbackURL.host, "127.0.0.1")
+		async let token = redirect.wait(forQueryItem: "loginToken", page: "signed in")
+
+		// Another path on the same port (a guessed callback) gets nothing.
+		var wrong = URLComponents(url: redirect.callbackURL, resolvingAgainstBaseURL: false)!
+		wrong.path = "/callback/guess"
+		wrong.query = "loginToken=evil"
+		let (_, miss) = try await URLSession.shared.data(from: wrong.url!)
+		XCTAssertEqual((miss as? HTTPURLResponse)?.statusCode, 404)
+
+		var right = URLComponents(url: redirect.callbackURL, resolvingAgainstBaseURL: false)!
+		right.percentEncodedQuery = "loginToken=syt_abc%2B1"
+		let (body, hit) = try await URLSession.shared.data(from: right.url!)
+		XCTAssertEqual((hit as? HTTPURLResponse)?.statusCode, 200)
+		XCTAssertEqual(String(decoding: body, as: UTF8.self), "signed in")
+		let value = try await token
+		XCTAssertEqual(value, "syt_abc+1")
+	}
+
+	func testLoopbackRedirectStopsOnCancel() async throws {
+		let redirect = try LoopbackRedirect()
+		let waiting = Task { try await redirect.wait(forQueryItem: "loginToken", page: "") }
+		try await Task.sleep(nanoseconds: 100_000_000)
+		redirect.stop()
+		do {
+			_ = try await waiting.value
+			XCTFail("wait returned after stop")
+		} catch is CancellationError {}
 	}
 
 	func testSyncFilterAsksOnlyForWhatTheClientUses() {

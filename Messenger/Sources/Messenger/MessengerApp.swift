@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		// SwiftPM executables launch as background processes unless told otherwise.
 		NSApp.setActivationPolicy(.regular)
+		// WLM's skin is light only: in dark mode, text in its white fields would be white too.
+		NSApp.appearance = NSAppearance(named: .aqua)
 		NSApp.activate(ignoringOtherApps: true)
 		MainActor.assumeIsolated {
 			if let icon = Skin.shared.appIcon { NSApp.applicationIconImage = icon }

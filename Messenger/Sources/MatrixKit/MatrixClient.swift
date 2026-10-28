@@ -20,9 +20,17 @@ public final class MatrixClient: IMService {
 
 	public var onEvent: ((IMEvent) -> Void)?
 	public var log: ((String) -> Void)?
+	/// Opens the homeserver's sign-in page for browser (SSO) sign-in; the app sets it.
+	public var openURL: ((URL) -> Void)?
 
 	/// nil finds the homeserver from the user ID's server name (.well-known).
 	public let homeserver: URL?
+
+	public enum SignInMethod: Sendable {
+		case password
+		/// The homeserver's own page in the web browser (SSO), e.g. MAS or an OpenID provider.
+		case browser
+	}
 
 	private struct Summary {
 		var heroes: [String] = []
@@ -35,6 +43,7 @@ public final class MatrixClient: IMService {
 	private var syncTask: Task<Void, Never>?
 	private var typingTask: Task<Void, Never>?
 	private var signingOut = false
+	private var redirect: LoopbackRedirect?
 	private var txnCounter = 0
 	private var creatingRooms: [String: Task<String, Error>] = [:]
 
@@ -64,6 +73,20 @@ public final class MatrixClient: IMService {
 
 	// MARK: - Sign in / out
 
+	/// How `userID`'s homeserver lets people sign in, so the sign-in window can
+	/// drop the password box. Password wins when both are offered.
+	public nonisolated static func signInMethod(for userID: String, homeserver: URL? = nil) async throws -> SignInMethod {
+		guard let serverName = MatrixID.serverName(of: userID) else { throw MatrixError.badUserID(userID) }
+		let base: URL
+		if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: serverName) }
+		let flows = try await MatrixAPI(baseURL: base).loginFlows()
+		if flows.contains("m.login.password") { return .password }
+		if flows.contains("m.login.sso"), flows.contains("m.login.token") { return .browser }
+		throw MatrixError.unsupportedLogin
+	}
+
+	/// Signs in with the password, or through the browser when it is empty and
+	/// the homeserver offers SSO (or offers nothing else).
 	public func signIn(email rawID: String, password: String, status initialStatus: Presence = .online, personalMessage psm: String? = nil) async throws {
 		guard state == .signedOut else { return }
 		let userID = rawID.trimmingCharacters(in: .whitespaces).lowercased()
@@ -71,16 +94,31 @@ public final class MatrixClient: IMService {
 		email = userID
 		signingOut = false
 		setState(.signingIn("Connecting..."))
+		var session: MatrixAPI?
 		do {
 			let base: URL
 			if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: serverName) }
 			log?("[matrix] homeserver \(base.absoluteString)")
 			await Self.goodbyes[userID]?.value
 			var api = MatrixAPI(baseURL: base)
-			setState(.signingIn("Signing in..."))
-			let login = try await api.login(user: userID, password: password, deviceID: Self.deviceID(for: userID),
-			                                deviceName: "Windows Live Messenger (\(Self.hostName))")
+			let flows = try await api.loginFlows()
+			try stillSigningIn()
+			log?("[matrix] login flows \(flows)")
+			let device = Self.deviceID(for: userID), deviceName = "Windows Live Messenger (\(Self.hostName))"
+			let login: MatrixAPI.Login
+			if flows.contains("m.login.password"), !password.isEmpty {
+				setState(.signingIn("Signing in..."))
+				login = try await api.login(user: userID, password: password, deviceID: device, deviceName: deviceName)
+			} else if flows.contains("m.login.sso"), flows.contains("m.login.token") {
+				login = try await browserLogin(api, deviceID: device, deviceName: deviceName)
+			} else if flows.contains("m.login.password") {
+				throw MatrixError.passwordRequired
+			} else {
+				throw MatrixError.unsupportedLogin
+			}
 			api.accessToken = login.accessToken
+			session = api
+			try stillSigningIn()
 			self.api = api
 			email = login.userID
 			deviceID = login.deviceID
@@ -89,12 +127,14 @@ public final class MatrixClient: IMService {
 
 			setState(.signingIn("Loading contacts..."))
 			let initial = try await api.sync(since: nil, filter: Self.filter(timelineLimit: 1), timeout: 0, setPresence: status.matrixState)
+			try stillSigningIn()
 			apply(initial, initial: true)
 			await loadProfile(personalMessage: psm)
 			await loadNames(Array(contacts.keys) + Array(invites.keys))
 			rebuildContacts(emit: false)
 			onEvent?(.contactListLoaded)
 			try await publishPresence()
+			try stillSigningIn()
 			startSync()
 			setState(.signedIn)
 			onEvent?(.profileChanged)
@@ -102,11 +142,45 @@ public final class MatrixClient: IMService {
 				onEvent?(.addedBy(email: inviter, displayName: name(of: inviter)))
 			}
 		} catch {
-			tearDown()
-			setState(.signedOut)
+			// Don't leave a half-made session behind on the account.
+			if let session { Task { _ = try? await session.call("POST", "/logout", body: [:]) } }
+			if !signingOut {
+				tearDown()
+				setState(.signedOut)
+			}
 			throw error
 		}
 	}
+
+	/// Cancel (signOut) during sign-in: stop at the next step.
+	private func stillSigningIn() throws {
+		if signingOut { throw CancellationError() }
+	}
+
+	/// SSO: the homeserver's sign-in page in the browser, which sends the
+	/// browser back to a loopback listener with a one-time loginToken.
+	private func browserLogin(_ api: MatrixAPI, deviceID: String, deviceName: String) async throws -> MatrixAPI.Login {
+		guard let openURL else { throw MatrixError.unsupportedLogin }
+		let redirect = try LoopbackRedirect()
+		self.redirect = redirect
+		defer {
+			redirect.stop()
+			if self.redirect === redirect { self.redirect = nil }
+		}
+		setState(.signingIn("Finish signing in in your web browser..."))
+		openURL(api.ssoRedirectURL(returningTo: redirect.callbackURL))
+		let token = try await redirect.wait(forQueryItem: "loginToken", page: Self.signedInPage)
+		try stillSigningIn()
+		setState(.signingIn("Signing in..."))
+		return try await api.login(token: token, deviceID: deviceID, deviceName: deviceName)
+	}
+
+	static let signedInPage = """
+		<!doctype html><meta charset="utf-8"><title>Windows Live Messenger</title>
+		<body style="font: 13px Tahoma, 'Segoe UI', sans-serif; color: #333; background: #eaf1f6; padding: 48px">
+		<h2 style="color: #1e3287; font-weight: normal">You're signed in to Windows Live Messenger</h2>
+		<p>You can close this tab and go back to Messenger.</p>
+		"""
 
 	public func signOut() {
 		signingOut = true
@@ -123,6 +197,8 @@ public final class MatrixClient: IMService {
 	}
 
 	private func tearDown() {
+		redirect?.stop()
+		redirect = nil
 		syncTask?.cancel()
 		syncTask = nil
 		typingTask?.cancel()

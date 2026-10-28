@@ -1,3 +1,4 @@
+import MatrixKit
 import MSNKit
 import SwiftUI
 
@@ -14,6 +15,9 @@ struct SignInView: View {
 	@State private var auto = false
 	@State private var showServer = false
 	@State private var didAutoSignIn = false
+	/// For a Matrix ID: how its homeserver signs people in (nil while unknown).
+	@State private var matrixMethod: MatrixClient.SignInMethod?
+	@State private var methodCheck: Task<Void, Never>?
 	private let s = Skin.shared
 
 	var body: some View {
@@ -53,7 +57,10 @@ struct SignInView: View {
 					.font(WLMFont.regular(13))
 					.textContentType(.username)
 					.padding(EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4))
-					.onChange(of: email) { _, new in loadSaved(for: new) }
+					.onChange(of: email) { _, new in
+						loadSaved(for: new)
+						checkSignInMethod(new)
+					}
 				Menu {
 					ForEach(app.settings.rememberedAccounts, id: \.self) { acct in Button(acct) { email = acct } }
 				} label: {
@@ -68,12 +75,20 @@ struct SignInView: View {
 			.overlay(Rectangle().stroke(Color(rgb: 0xAAB7C7), lineWidth: 1))
 			.padding(EdgeInsets(top: 2, leading: 0, bottom: 8, trailing: 0))
 
-			label(s.string(61282, "Password:"))
-			SecureField("", text: $password)
-				.textFieldStyle(WLMTextFieldStyle())
-				.textContentType(.password)
-				.onSubmit(signIn)
-				.padding(EdgeInsets(top: 2, leading: 0, bottom: 5, trailing: 0))
+			if matrixMethod == .browser {
+				Text("Sign in opens your web browser, where \(MatrixID.serverName(of: email.lowercased()) ?? "your server") asks for your password.")
+					.font(WLMFont.regular())
+					.foregroundStyle(R.hint)
+					.fixedSize(horizontal: false, vertical: true)
+					.padding(EdgeInsets(top: 0, leading: 0, bottom: 5, trailing: 0))
+			} else {
+				label(s.string(61282, "Password:"))
+				SecureField("", text: $password)
+					.textFieldStyle(WLMTextFieldStyle())
+					.textContentType(.password)
+					.onSubmit(signIn)
+					.padding(EdgeInsets(top: 2, leading: 0, bottom: 5, trailing: 0))
+			}
 
 			HStack(spacing: 2) {
 				label(s.string(61286, "Status:")).padding(.vertical, 4)
@@ -90,9 +105,9 @@ struct SignInView: View {
 				WLMCheckbox(title: s.string(61288, "Remember me"), isOn: $rememberMe)
 					.padding(.vertical, 3)
 				Spacer().frame(height: 18)
-				WLMCheckbox(title: s.string(61295, "Remember my password"), isOn: $rememberPassword)
+				WLMCheckbox(title: s.string(61295, "Remember my password"), isOn: $rememberPassword, enabled: matrixMethod != .browser)
 					.padding(.vertical, 3)
-				WLMCheckbox(title: s.string(61298, "Sign me in automatically"), isOn: $auto, enabled: rememberPassword)
+				WLMCheckbox(title: s.string(61298, "Sign me in automatically"), isOn: $auto, enabled: rememberPassword && matrixMethod != .browser)
 					.padding(.vertical, 3)
 			}
 			.padding(.top, 30)
@@ -181,6 +196,7 @@ struct SignInView: View {
 		rememberPassword = st.rememberPassword
 		auto = st.signInAutomatically
 		loadSaved(for: email)
+		checkSignInMethod(email)
 		if auto, !didAutoSignIn, !password.isEmpty, app.signInError == nil {
 			didAutoSignIn = true
 			signIn()
@@ -193,8 +209,24 @@ struct SignInView: View {
 		}
 	}
 
+	/// Asks a Matrix ID's homeserver whether it takes passwords or signs in through the browser.
+	private func checkSignInMethod(_ account: String) {
+		methodCheck?.cancel()
+		matrixMethod = nil
+		let id = account.trimmingCharacters(in: .whitespaces).lowercased()
+		guard MatrixID.isUserID(id) else { return }
+		let homeserver = app.settings.matrixHomeserverURL
+		methodCheck = Task {
+			try? await Task.sleep(nanoseconds: 500_000_000)  // wait for typing to pause
+			guard !Task.isCancelled, let method = try? await MatrixClient.signInMethod(for: id, homeserver: homeserver),
+			      !Task.isCancelled else { return }
+			matrixMethod = method
+		}
+	}
+
 	private func signIn() {
-		app.signIn(email: email, password: password, status: status, rememberMe: rememberMe,
-		           rememberPassword: rememberPassword, auto: auto)
+		let browser = matrixMethod == .browser
+		app.signIn(email: email, password: browser ? "" : password, status: status, rememberMe: rememberMe,
+		           rememberPassword: rememberPassword && !browser, auto: auto && !browser)
 	}
 }

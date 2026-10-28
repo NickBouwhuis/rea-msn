@@ -97,7 +97,8 @@ final class AppState {
 
 	func signIn(email rawEmail: String, password: String, status: Presence, rememberMe: Bool, rememberPassword: Bool) {
 		let email = rawEmail.trimmingCharacters(in: .whitespaces).lowercased()
-		guard !email.isEmpty, !password.isEmpty else {
+		// Matrix homeservers may sign in through the browser instead, with no password here.
+		guard !email.isEmpty, !password.isEmpty || MatrixID.isUserID(email) else {
 			signInError = "Please type your e-mail address and password."
 			notify(onPhase)
 			return
@@ -110,12 +111,17 @@ final class AppState {
 		s.rememberedAccounts.removeAll { $0 == email }
 		if rememberMe { s.rememberedAccounts.insert(email, at: 0) }
 		settings = s
-		if rememberPassword { SecretStore.set(password, for: email) } else { SecretStore.delete(email) }
+		if !rememberPassword { SecretStore.delete(email) } else if !password.isEmpty { SecretStore.set(password, for: email) }
 
 		// A Matrix ID (@user:server) signs in to Matrix; anything else to the MSN service.
-		let client: any IMService = MatrixID.isUserID(email)
-			? MatrixClient(homeserver: settings.matrixHomeserverURL)
-			: MessengerClient(config: settings.serverConfig)
+		let client: any IMService
+		if MatrixID.isUserID(email) {
+			let matrix = MatrixClient(homeserver: settings.matrixHomeserverURL)
+			matrix.openURL = { url in gtk_uri_launcher_launch(gtk_uri_launcher_new(url.absoluteString), nil, nil, nil, nil) }
+			client = matrix
+		} else {
+			client = MessengerClient(config: settings.serverConfig)
+		}
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil { client.log = { print($0) } }
 		client.onEvent = { [weak self] in self?.handle($0) }
 		self.client = client
@@ -126,6 +132,7 @@ final class AppState {
 			do {
 				try await client.signIn(email: email, password: password, status: status)
 			} catch {
+				guard self.client === client else { return }  // cancelled
 				self.client = nil
 				self.phase = .signedOut
 				self.signInError = Self.friendly(error)

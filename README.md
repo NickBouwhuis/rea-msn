@@ -123,7 +123,10 @@ supported, and neither are offline messages. See the RE notes for details.
 Sign in with a Matrix ID such as `@you:matrix.org` instead of an e-mail address, and the same
 windows talk to a Matrix homeserver through MatrixKit. The homeserver is found through the server's
 `.well-known`; to set one by hand, use the field under "Connect to" (macOS) or "Matrix homeserver..."
-in the service menu (Linux). WLM concepts map onto Matrix like this:
+in the service menu (Linux). When the homeserver signs people in through the browser (SSO, such as
+MAS), the sign-in window notices and drops the password box: "Sign in" opens the homeserver's page in
+your browser, which sends a one-time token back to Messenger on a 127.0.0.1 port. WLM concepts map
+onto Matrix like this:
 
 | WLM | Matrix |
 | --- | --- |
@@ -144,7 +147,9 @@ Not supported yet:
   "This message is encrypted", and Messenger won't reply in them. DMs that Messenger starts are
   unencrypted, so they work with any client.
 - Group rooms: only one-to-one chats are shown.
-- Homeservers that only allow browser (OIDC) sign-in. matrix.org still accepts passwords.
+- Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
+  Synapse still offer for existing clients.
+- Session verification, which needs end-to-end encryption.
 - Message history: like WLM, a conversation starts empty.
 - Servers with presence turned off: contacts there always look Offline, but you can still message them.
 

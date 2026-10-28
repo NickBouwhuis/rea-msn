@@ -6,7 +6,8 @@ import FoundationNetworking
 public enum MatrixError: Error, LocalizedError, Equatable {
 	case badUserID(String)
 	case noHomeserver(String)
-	case passwordLoginUnsupported
+	case unsupportedLogin
+	case passwordRequired
 	case authenticationFailed
 	case encryptedRoom
 	/// errcode/error from the homeserver, e.g. M_FORBIDDEN.
@@ -17,8 +18,9 @@ public enum MatrixError: Error, LocalizedError, Equatable {
 		switch self {
 		case let .badUserID(id): return "\"\(id)\" is not a Matrix ID. Matrix IDs look like @someone:matrix.org."
 		case let .noHomeserver(name): return "Couldn't find the Matrix homeserver for \(name)."
-		case .passwordLoginUnsupported:
-			return "This homeserver only allows signing in through a web browser, which this version of Messenger doesn't support yet."
+		case .unsupportedLogin:
+			return "This homeserver doesn't offer a way of signing in that this version of Messenger supports (password or web browser)."
+		case .passwordRequired: return "Please type your password."
 		case .authenticationFailed: return "The Matrix ID or password is incorrect."
 		case .encryptedRoom:
 			return "This conversation is end-to-end encrypted, which this version of Messenger doesn't support yet."
@@ -136,19 +138,38 @@ public struct MatrixAPI: Sendable {
 		public var deviceID: String
 	}
 
+	/// The login types the homeserver offers, e.g. m.login.password, m.login.sso.
+	public func loginFlows() async throws -> [String] {
+		try await call("GET", "/login")["flows"].array.compactMap { $0["type"].string }
+	}
+
 	public func login(user: String, password: String, deviceID: String, deviceName: String) async throws -> Login {
-		let flows = try await call("GET", "/login")["flows"].array.compactMap { $0["type"].string }
-		guard flows.contains("m.login.password") else { throw MatrixError.passwordLoginUnsupported }
-		let body: JSON = [
+		try await login([
 			"type": "m.login.password",
 			"identifier": ["type": "m.id.user", "user": .string(user)],
 			"password": .string(password),
-			"device_id": .string(deviceID),
-			"initial_device_display_name": .string(deviceName),
-		]
+		], deviceID: deviceID, deviceName: deviceName)
+	}
+
+	/// Finishes a browser (SSO) sign-in with the loginToken the homeserver redirected back with.
+	public func login(token: String, deviceID: String, deviceName: String) async throws -> Login {
+		try await login(["type": "m.login.token", "token": .string(token)], deviceID: deviceID, deviceName: deviceName)
+	}
+
+	/// Where to send the browser for SSO; the homeserver comes back to `redirect` with ?loginToken=.
+	public func ssoRedirectURL(returningTo redirect: URL) -> URL {
+		var components = URLComponents(string: baseURL.absoluteString + "/_matrix/client/v3/login/sso/redirect")!
+		components.queryItems = [URLQueryItem(name: "redirectUrl", value: redirect.absoluteString)]
+		return components.url!
+	}
+
+	private func login(_ credentials: JSON, deviceID: String, deviceName: String) async throws -> Login {
+		var body = credentials.object
+		body["device_id"] = .string(deviceID)
+		body["initial_device_display_name"] = .string(deviceName)
 		let reply: JSON
 		do {
-			reply = try await call("POST", "/login", body: body)
+			reply = try await call("POST", "/login", body: .object(body))
 		} catch MatrixError.server(_, "M_FORBIDDEN", _) {
 			throw MatrixError.authenticationFailed
 		}
