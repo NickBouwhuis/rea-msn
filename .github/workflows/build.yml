@@ -37,6 +37,12 @@ jobs:
       NOTARY_KEY_B64: ${{ secrets.NOTARY_KEY }}
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode
+        # The newest one: the default (16.4) linker asserts on matrix-rust-sdk's prebuilt objects.
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          xcodebuild -version
       - name: Version
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(git rev-parse --short HEAD)"; fi
