@@ -29,26 +29,22 @@ env:
 jobs:
   macos:
     name: macOS DMG
-    # Intel image: GitHub's arm64 macOS runners are often capacity-constrained,
-    # and the universal build doesn't care which Mac it runs on.
-    runs-on: macos-15-intel
+    # Xcode 27: earlier linkers (16.4, 26.3) assert on matrix-rust-sdk's
+    # prebuilt objects when linking Messenger for Matrix. The universal build
+    # doesn't care which Mac it runs on.
+    runs-on: xcode-27
     env:
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
       NOTARY_KEY_B64: ${{ secrets.NOTARY_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - name: Select Xcode
-        # The newest one: the default (16.4) linker asserts on matrix-rust-sdk's prebuilt objects.
-        run: |
-          ls -d /Applications/Xcode*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
-          xcodebuild -version
       - name: Version
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0~git$(git rev-parse --short HEAD)"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
           swift --version
+          xcodebuild -version
       - name: Test
         working-directory: Messenger
         run: swift test
