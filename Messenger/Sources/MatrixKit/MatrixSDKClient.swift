@@ -460,7 +460,7 @@ public final class MatrixClient: IMService {
 			for hero in info.heroes { learn(hero.userId, name: hero.displayName, avatar: hero.avatarUrl) }
 			switch info.membership {
 			case .joined:
-				if let peer = directPeer[id] {
+				if let peer = directPeer[id], isOneToOne(id, with: peer) {
 					peers[id] = peer
 					lists[peer, default: []].formUnion([.forward, .allow])
 				} else if let others = members[id]?.subtracting([email]), others.count == 1, members[id]?.count == 2,
@@ -1018,14 +1018,23 @@ public final class MatrixClient: IMService {
 		if let id = existingRoom(with: peer), let room = rooms[id] { stopTyping(in: room) }
 	}
 
-	/// The room to talk to `user` in, of the rooms with them we're in (m.direct's
-	/// newest first): an encrypted one they're in too, else any they're in,
-	/// else the newest listed.
+	/// The room to talk to `user` in, of the one-to-one rooms with them we're in
+	/// (m.direct's newest first): an encrypted one they're in too, else any
+	/// they're in, else the newest listed.
 	private func existingRoom(with user: String) -> String? {
-		let listed = (direct[user] ?? []).reversed().filter { roomInfos[$0]?.membership == .joined }
+		let listed = (direct[user] ?? []).reversed().filter { roomInfos[$0]?.membership == .joined && isOneToOne($0, with: user) }
 		let others = roomPeer.filter { $0.value == user && !listed.contains($0.key) }.map(\.key)
 		let shared = (listed + others).filter { members[$0]?.contains(user) == true }
 		return shared.first(where: isEncrypted) ?? shared.first ?? listed.first ?? others.first
+	}
+
+	/// Whether nobody but you and `user` is in room `id` (they may have left).
+	/// m.direct lists group rooms too: other apps and bridges mark them, and a
+	/// DM someone else was invited to stays listed. A message to one person
+	/// mustn't land there.
+	private func isOneToOne(_ id: String, with user: String) -> Bool {
+		guard let others = members[id]?.subtracting([email]) else { return false }
+		return others.isSubset(of: [user])
 	}
 
 	private func isEncrypted(_ id: String) -> Bool {

@@ -100,6 +100,11 @@ extension CLI {
 			await b.sendMessage(to: idA, text: "Hi Alice, it works \(run)")
 			try await waitFor("A receives reply") { received(by: "A", from: idB, "Hi Alice, it works \(run)") }
 		}
+		if let idC {
+			try await groupInDirectCheck(a, idA: idA, idB: idB, idC: idC, password: password, run: run) {
+				received(by: "B", from: idA, $0)
+			}
+		}
 		if encrypted {
 			try await step("the server only has ciphertext (m.room.encrypted)") {
 				let events = try await recentEvents(idB, password, inDMWith: idA)
@@ -237,6 +242,50 @@ extension CLI {
 			try await a.removeContact(idC)
 		}
 		a.onEvent = previous
+	}
+
+	/// m.direct can list a group room under someone (other apps and bridges do
+	/// that): a message to them must still go to the DM, not to the group.
+	private func groupInDirectCheck(_ a: any IMService, idA: String, idB: String, idC: String, password: String,
+	                                run: String, received: @escaping (String) -> Bool) async throws {
+		let base: URL
+		if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: MatrixID.serverName(of: idA) ?? "") }
+		var api = MatrixAPI(baseURL: base)
+		var group = ""
+		var original: JSON = [:]
+		try await step("A is in a group with B and C that m.direct lists under B") {
+			api.accessToken = try await api.login(user: idA, password: password, deviceID: "WLME2EGROUP", deviceName: "msnctl e2e").accessToken
+			group = try await api.call("POST", "/createRoom", body: [
+				"preset": "private_chat", "name": .string("E2E group \(run)"), "invite": [.string(idB), .string(idC)],
+				"initial_state": [["type": "m.room.encryption", "state_key": "", "content": ["algorithm": "m.megolm.v1.aes-sha2"]]],
+			])["room_id"].string ?? ""
+			let path = "/user/\(MatrixAPI.segment(idA))/account_data/m.direct"
+			original = try await api.call("GET", path)
+			var direct = original.object
+			direct[idB] = .array((direct[idB]?.array ?? []) + [.string(group)])
+			_ = try await api.call("PUT", path, body: .object(direct))
+			// Long enough for A to read m.direct and the room's members again.
+			try await Task.sleep(nanoseconds: 15_000_000_000)
+		}
+		var failure: Error?
+		do {
+			try await step("A → B still goes to their DM, not the group") {
+				let text = "only for B \(run)"
+				await a.sendMessage(to: idB, text: text)
+				try await waitFor("B receives it") { received(text) }
+				let chunk = try await api.call("GET", "/rooms/\(MatrixAPI.segment(group))/messages", query: ["dir": "b", "limit": "20"])["chunk"]
+				let sent = chunk.array.filter { ["m.room.message", "m.room.encrypted"].contains($0["type"].string ?? "") }
+				guard sent.isEmpty else { throw MSNPError.unexpected("\(sent.count) message(s) went to the group") }
+			}
+		} catch {
+			failure = error
+		}
+		try await step("reset: A leaves the group, m.direct as it was") {
+			_ = try await api.call("PUT", "/user/\(MatrixAPI.segment(idA))/account_data/m.direct", body: original)
+			_ = try await api.call("POST", "/rooms/\(MatrixAPI.segment(group))/leave", body: [:])
+			_ = try? await api.call("POST", "/logout", body: [:])
+		}
+		if let failure { throw failure }
 	}
 
 	#if os(macOS)  // matrix-rust-sdk, which has verification, is macOS-only so far

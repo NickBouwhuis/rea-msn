@@ -436,7 +436,7 @@ public final class MatrixClient: IMService {
 		var peers: [String: String] = [:]
 		var lists: [String: MSNList] = [:]
 		for (user, rooms) in direct where user != email {
-			let live = rooms.filter(joined.contains)
+			let live = rooms.filter { joined.contains($0) && isOneToOne($0) }
 			guard !live.isEmpty else { continue }
 			for room in live { peers[room] = user }
 			lists[user, default: []].formUnion([.forward, .allow])
@@ -673,7 +673,15 @@ public final class MatrixClient: IMService {
 	}
 
 	private func existingRoom(with user: String) -> String? {
-		direct[user]?.last(where: joined.contains) ?? roomPeer.first { $0.value == user }?.key
+		direct[user]?.last { joined.contains($0) && isOneToOne($0) } ?? roomPeer.first { $0.value == user }?.key
+	}
+
+	/// Whether at most two people (you and them) are in room `room`. m.direct
+	/// lists group rooms too: other apps and bridges mark them, and a DM someone
+	/// else was invited to stays listed. A message to one person mustn't land there.
+	private func isOneToOne(_ room: String) -> Bool {
+		guard let s = summaries[room] else { return true }
+		return s.joined + s.invited <= 2
 	}
 
 	// MARK: - Conversations
