@@ -4,11 +4,14 @@ tree (AT-SPI), for linux/scripts/smoke-test.sh.
 
   smoke-at.py dump                     the tree: role, name, description, place
   smoke-at.py find TEXT [--exact] [--in WINDOW] [--role ROLE] [--nth N]
-                                       "x y": the middle of the Nth (0-based)
-                                       showing widget whose name or description
-                                       has (or, with --exact, is) TEXT, in
-                                       windows named like WINDOW
+                                       "x y": where on the screen the middle is
+                                       of the Nth (0-based) showing widget whose
+                                       name or description has (or, with
+                                       --exact, is) TEXT, in windows named like
+                                       WINDOW
 """
+import re
+import subprocess
 import sys
 
 import gi
@@ -24,14 +27,14 @@ def children(node):
         return []
 
 
-def walk(node, window="", depth=0):
-    """Yields (node, the name of its top-level window, depth)."""
+def walk(node, window=None, depth=0):
+    """Yields (node, its top-level window's node, depth)."""
     if node is None:
         return
     yield node, window, depth
     for child in children(node):
-        # Depth 1 is an application's window (the desktop's children are the applications).
-        yield from walk(child, text(child) if depth == 1 else window, depth + 1)
+        # An application (depth 1) has its windows as children.
+        yield from walk(child, child if depth == 1 else window, depth + 1)
 
 
 def text(node):
@@ -49,14 +52,40 @@ def describe(node):
 
 
 def place(node):
-    """x, y, width, height on the screen, if the widget is showing."""
+    """x, y, width, height within its window, if the widget is showing. GTK 4
+    only tells where a widget is in its window, not on the screen."""
     try:
         if not node.get_state_set().contains(Atspi.StateType.SHOWING):
             return None
-        e = node.get_extents(Atspi.CoordType.SCREEN)
+        e = node.get_extents(Atspi.CoordType.WINDOW)
         return (e.x, e.y, e.width, e.height) if e.width > 0 and e.height > 0 else None
     except Exception:
         return None
+
+
+def origin(window):
+    """Where `window` (an accessible) is on the screen: the X window with its
+    title and size, asked from xdotool."""
+    size = place(window)
+    if size is None:
+        return None
+    try:
+        ids = subprocess.run(["xdotool", "search", "--name", "^" + re.escape(text(window)) + "$"],
+                             capture_output=True, text=True).stdout.split()
+    except OSError:
+        return None
+    best = None
+    for xid in ids:
+        geometry = dict(line.split("=", 1) for line in subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", xid], capture_output=True, text=True).stdout.split() if "=" in line)
+        try:
+            x, y, w, h = (int(geometry[k]) for k in ("X", "Y", "WIDTH", "HEIGHT"))
+        except (KeyError, ValueError):
+            continue
+        off = abs(w - size[2]) + abs(h - size[3])
+        if best is None or off <= best[0]:
+            best = (off, x, y)
+    return best[1:] if best else None
 
 
 def nodes():
@@ -72,7 +101,8 @@ def main(args):
                 role = node.get_role_name()
             except Exception:
                 role = "?"
-            print("  " * depth + f"{role} {text(node)!r} {describe(node)!r} {place(node)}")
+            print("  " * depth + f"{role} {text(node)!r} {describe(node)!r} {place(node)}"
+                  + (f" at {origin(node)}" if depth == 2 else ""))
         return 0
     if args[:1] == ["find"] and len(args) >= 2:
         wanted, within, role, nth = args[1], None, None, 0
@@ -88,7 +118,7 @@ def main(args):
             rest = rest[2:]
         found = []
         for node, window, depth in nodes():
-            if depth < 3 or (within is not None and within not in window):
+            if depth < 3 or (within is not None and within not in text(window)):
                 continue
             names = (text(node), describe(node))
             if wanted not in names if exact else not any(wanted in name for name in names):
@@ -98,12 +128,11 @@ def main(args):
                     continue
             except Exception:
                 continue
-            where = place(node)
-            if where:
-                found.append(where)
+            where, corner = place(node), origin(window)
+            if where and corner:
+                found.append((corner[0] + where[0] + where[2] // 2, corner[1] + where[1] + where[3] // 2))
         if len(found) > nth:
-            x, y, w, h = found[nth]
-            print(x + w // 2, y + h // 2)
+            print(*found[nth])
             return 0
         print(f"no showing widget with {wanted!r}", file=sys.stderr)
         return 1
