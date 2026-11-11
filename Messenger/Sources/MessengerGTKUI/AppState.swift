@@ -100,6 +100,28 @@ final class AppState {
 	private(set) var myMessage = ""
 	private(set) var myStatus: Presence = .offline
 	var addRequests: [(email: String, name: String)] = []
+	/// Matrix with encryption: this session isn't cross-signed yet, and the
+	/// verification dialog's step (nil: no dialog).
+	private(set) var sessionUnverified = false
+	var verification: Verification? { didSet { onVerification?() } }
+	var onVerification: (() -> Void)?
+	private var promptedVerification = false
+
+	enum Verification: Equatable {
+		case prompt
+		case waiting(String)
+		/// Another of your sessions asks to verify this one.
+		case incoming(String)
+		case emojis([Emoji])
+		case recoveryKey
+		case done
+		case failed(String)
+	}
+
+	struct Emoji: Equatable {
+		let symbol: String
+		let name: String
+	}
 
 	/// Listeners the windows register.
 	var onPhase: [() -> Void] = []
@@ -141,6 +163,10 @@ final class AppState {
 		if ProcessInfo.processInfo.environment["MESSENGER_DEBUG"] != nil {
 			client.log = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }  // unbuffered
 		}
+		if let verifier = client as? IMVerifying {
+			verifier.onVerification = { [weak self] in self?.handleVerification($0) }
+			promptedVerification = false
+		}
 		client.onEvent = { [weak self] in self?.handle($0) }
 		client.displayPictureDirectory = Self.dataDirectory.appendingPathComponent("Pictures", isDirectory: true)
 		self.client = client
@@ -171,6 +197,8 @@ final class AppState {
 	}
 
 	func signOut() {
+		verification = nil
+		sessionUnverified = false
 		client?.signOut()
 		client = nil
 		for w in conversations.values { w.close() }
@@ -363,6 +391,76 @@ final class AppState {
 		}
 	}
 
+	// MARK: Session verification (services with end-to-end encryption)
+
+	private var verifier: IMVerifying? { client as? IMVerifying }
+
+	private func handleVerification(_ event: IMVerificationEvent) {
+		switch event {
+		case let .state(verified):
+			sessionUnverified = !verified
+			if verified {
+				if verification != nil { verification = .done }
+			} else if !promptedVerification {
+				promptedVerification = true
+				verification = .prompt
+			}
+			notify(onContacts)  // the menu offers "Verify this session" while it's needed
+		case let .requested(device):
+			verification = .incoming(device)
+		case let .emojis(list):
+			verification = .emojis(list.map { Emoji(symbol: $0.symbol, name: $0.description) })
+		case .finished:
+			verification = .done
+		case let .cancelled(why):
+			if verification != nil, verification != .done {
+				verification = .failed(why ?? "The verification was cancelled.")
+			}
+		}
+	}
+
+	func verifyWithOtherSession() {
+		verification = .waiting("Open Element (or another app you're signed in to) and accept the verification request there.")
+		Task {
+			do { try await verifier?.requestVerification() } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func acceptIncomingVerification() {
+		verification = .waiting("Waiting for your other session...")
+		Task {
+			do { try await verifier?.acceptVerification() } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func confirmEmojis(_ match: Bool) {
+		verification = match ? .waiting("Waiting for your other session to confirm...")
+			: .failed("The emoji didn't match, so this session wasn't verified.")
+		Task {
+			do { try await verifier?.confirmVerification(match) } catch { verification = .failed(error.localizedDescription) }
+		}
+	}
+
+	func recover(_ key: String) {
+		verification = .waiting("Checking your recovery key...")
+		Task {
+			do {
+				try await verifier?.recover(recoveryKey: key)
+				verification = .done
+			} catch {
+				verification = .failed("That recovery key didn't work. (\(error.localizedDescription))")
+			}
+		}
+	}
+
+	func closeVerification() {
+		switch verification {
+		case .waiting?, .incoming?, .emojis?: Task { await verifier?.cancelVerification() }
+		default: break
+		}
+		verification = nil
+	}
+
 	// MARK: Events
 
 	private func refresh() {
@@ -421,6 +519,8 @@ final class AppState {
 		case .displayPictureChanged:
 			picturesChanged()
 		case let .signedOut(reason):
+			verification = nil
+			sessionUnverified = false
 			for w in conversations.values { w.close() }
 			conversations.removeAll()
 			contacts = []
