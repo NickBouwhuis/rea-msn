@@ -155,34 +155,29 @@ shot 03-group-window 3
 say "Right-click a group: Rename, Leave; leaving asks first"
 click 3 "Weekend plans" --in "$MAIN"
 shot 04-group-menu
-press "Leave group conversation..." && wait_for "Are you sure you want to leave the group conversation Weekend plans?" && {
+press "Leave group conversation..." --exact && wait_for "Are you sure you want to leave the group conversation Weekend plans?" && {
 	shot 05-leave-confirmation
 	press "Cancel" --exact
 }
 
 say "The Contacts menu: start a group conversation"
-press "Contacts menu"
+press "Contacts menu" --exact
 shot 06-contacts-menu
-at dump >"$OUT/tree-06.txt"
-# The menu's items are in the popover's own window, whose place AT-SPI can't
-# tell; with the main window at 20,20 they are here. A real click, to see the
-# app as a person's click drives it.
-xdotool mousemove 300 210 click 1
-sleep 1
-type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
+# Exactly: the menu button's own accessible name has its items' text in it.
+press "Start a group conversation..." --exact && type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
 	wait_for "Trip planning" --in "Trip planning"
 	place "Trip planning" 420 400
 	shot 08-new-group 2
 }
 
 say "Rename it"
-click 3 "Trip planning" --in "$MAIN" && press "Rename..." && type_in "Rename group conversation" "Trip to Texel" 09-rename-prompt && {
+click 3 "Trip planning" --in "$MAIN" && press "Rename..." --exact && type_in "Rename group conversation" "Trip to Texel" 09-rename-prompt && {
 	wait_for "Trip to Texel" --in "$MAIN"
 	shot 10-renamed 2
 }
 
 say "Add a contact, with a room's address: joins it"
-press "Contacts menu" && sleep 1 && xdotool mousemove 273 190 click 1 && sleep 1 && type_in "Add a Contact" "#open-room:localhost" 11-add-contact-prompt && {
+press "Contacts menu" --exact && press "Add a contact..." --exact && type_in "Add a Contact" "#open-room:localhost" 11-add-contact-prompt && {
 	wait_for "Open room" --in "$MAIN"
 	shot 12-joined-by-address 2
 }
@@ -199,7 +194,7 @@ double_click "Bob" --exact --in "$MAIN" && wait_for "Bob" --in "Bob" && {
 }
 
 say "Leaving a group, after the confirmation"
-click 3 "Weekend plans" --in "$MAIN" && press "Leave group conversation..." && press "Leave" --exact
+click 3 "Weekend plans" --in "$MAIN" && press "Leave group conversation..." --exact && press "Leave" --exact
 sleep 3
 if at find "Weekend plans" --in "$MAIN" >/dev/null 2>&1; then
 	echo "!! Weekend plans is still listed"
