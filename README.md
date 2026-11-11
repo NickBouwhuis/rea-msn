@@ -28,7 +28,8 @@ Messenger/             Swift package
   Sources/msnctl       CLI: sign in, send messages, run the end-to-end scenario
   Tests/               unit tests pinned to server-generated and decompiled-code vectors
   scripts/             macOS: build-app.sh, package-dmg.sh, import-wlm-assets.sh, import-wlm-sounds.sh
-linux/scripts/         Linux: import-wlm-assets.sh, install.sh, package-deb.sh, vmpal (VMPal CLI wrapper)
+linux/scripts/         Linux: import-wlm-assets.sh, install.sh, package-deb.sh, build-matrix-sdk.sh,
+                       smoke-test.sh, vmpal (VMPal CLI wrapper)
 devserver/             Docker image of the open-source Escargot server, for local testing
 devserver/matrix/      a throwaway Synapse homeserver for testing MatrixKit
 ```
@@ -140,10 +141,13 @@ the imported WLM look with the Escargot app. Build it with `VARIANT=matrix` and 
 (`build-app.sh`, `package-dmg.sh`, `linux/scripts/install.sh`, `package-deb.sh`), or run it with
 `swift run MatrixMessenger` / `MatrixMessengerGTK`. The Escargot app doesn't link the Matrix SDK.
 
-On macOS it runs on
+It runs on
 [matrix-rust-sdk](https://github.com/matrix-org/matrix-rust-components-swift), the engine Element X
-uses, so conversations are end-to-end encrypted and your existing Element chats work. Linux still
-uses a plain client-server client without encryption, until the SDK is built there. The homeserver
+uses, so conversations are end-to-end encrypted and your existing Element chats work. macOS uses the
+SDK's Swift package release; for Linux, `linux/scripts/build-matrix-sdk.sh` builds the same SDK commit
+(it needs Rust and cmake, and takes about 15 minutes once), and the Ubuntu packages are made that way.
+A Linux build without it, such as a plain `swift run MatrixMessengerGTK`, still works but uses a
+plain client-server client without encryption. The homeserver
 is found through the server's `.well-known`; to set one by hand, use the "Homeserver" link under the
 sign-in form. When the homeserver signs people in through the browser (SSO, such as
 MAS), the sign-in window notices and drops the password box: "Sign in" opens the homeserver's page in
@@ -167,9 +171,11 @@ onto Matrix like this:
 | Nudge | an `m.emote` ("* Alice just sent you a nudge.") with a namespaced flag |
 | Typing | `m.typing` |
 
-On macOS, Messenger is a session (device) on your account like any other. It keeps the session in the
+Messenger is a session (device) on your account like any other. On macOS it keeps the session in the
 Keychain, with its encryption keys in a passphrase-protected store under
-`~/Library/Application Support/MessengerMac/Matrix`, so it stays the same session, and stays
+`~/Library/Application Support/MessengerMac/Matrix`; on Linux both are under
+`~/.local/share/messenger-wlm-matrix/Matrix`, the session in a file only you can read (not yet in the
+desktop's keyring). So it stays the same session, and stays
 verified, between launches. "Sign out" keeps it when "Remember me" is ticked, and logs it out
 otherwise. After the first sign-in Messenger asks you to verify the session, by comparing emoji with
 Element or another of your sessions (either side can start), or with your recovery key (Actions ▸
@@ -186,7 +192,8 @@ Not supported yet:
 - Voice and video.
 - Presence comes from polling every 10 seconds (the SDK doesn't expose presence events). On servers
   with presence turned off, contacts always look Offline, but you can still message them.
-- Linux: encryption and verification (see above).
+- Linux: pasting a picture into the message box (Share Files sends one), and the session isn't kept
+  in the keyring.
 
 ## Testing
 
@@ -206,9 +213,12 @@ the apps from another account.
 Seeded test accounts are `alice@`, `bob@` and `carol@example.com`, all with password `123456`.
 
 The Matrix backend has the same scenario against a local Synapse (`@alice`, `@bob` and
-`@carol:localhost`, password `123456`). On macOS it also checks, over the plain API, that the server
-only ever stores ciphertext. Carol's account sends a message nobody can decrypt, which must show as a
-notice and be answered encrypted (on Linux: refused). `verify-wait` and `verify` run both sides of
+`@carol:localhost`, password `123456`). With matrix-rust-sdk it also checks, over the plain API, that
+the server only ever stores ciphertext. Carol's account sends a message nobody can decrypt, which must
+show as a notice and be answered encrypted (by the plain client: refused). CI runs it for both clients
+on Ubuntu. `linux/scripts/smoke-test.sh` goes further and clicks through the GTK app itself under a
+virtual display, saving a screenshot of each step (the "GTK smoke test" workflow, run by hand).
+`verify-wait` and `verify` run both sides of
 emoji verification between two sessions of a fresh account:
 
 ```sh

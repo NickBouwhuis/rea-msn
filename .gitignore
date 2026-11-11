@@ -3,3 +3,4 @@ build/
 .swiftpm/
 re/scripts/rea-env.sh
 .DS_Store
+Messenger/Vendor/

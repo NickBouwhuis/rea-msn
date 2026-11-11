@@ -160,6 +160,17 @@ extension CLI {
 			try? FileManager.default.removeItem(at: source)
 			try? FileManager.default.removeItem(at: saved)
 		}
+		try await step("a picture shared as a file goes out as a picture (m.image)") {
+			let name = "shared-\(run).png"
+			let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")!
+			let source = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+			try png.write(to: source)
+			try a.sendFile(source, to: idB)
+			// The encrypting client shows it; the plain one, which shows no pictures, offers it to save.
+			try await waitFor("B gets the picture") { pictures["B:\(name)"] == png || files["B:\(name)"]?.state == .offered }
+			try await waitFor("A is done sending") { files["A:\(name)"]?.state == .completed }
+			try? FileManager.default.removeItem(at: source)
+		}
 		try await step("B signs out and A sees Offline") {
 			b.signOut()
 			try await waitFor("B offline") { a.contacts[idB]?.status == .offline }
@@ -184,7 +195,7 @@ extension CLI {
 			guard a2.personalMessage == "Ported with rea + Ghidra" else { throw MSNPError.unexpected("PSM not kept: \(a2.personalMessage)") }
 			a2.signOut()
 		}
-		#if os(macOS)
+		#if canImport(MatrixRustSDK)
 		try await step("a remembered session comes back without the password, as the same device, with history") {
 			let store = MemoryMatrixSessionStore()
 			let dir = FileManager.default.temporaryDirectory.appendingPathComponent("msnctl-\(UUID().uuidString)", isDirectory: true)
@@ -456,7 +467,7 @@ extension CLI {
 		if let failure { throw failure }
 	}
 
-	#if os(macOS)  // matrix-rust-sdk, which has verification, is macOS-only so far
+	#if canImport(MatrixRustSDK)  // verification needs matrix-rust-sdk
 	/// Signs in and, for `seconds`, accepts verification requests from your
 	/// other sessions, confirming the emoji. On a fresh account this first
 	/// session sets up cross-signing, so it can verify the others.

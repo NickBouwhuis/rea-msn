@@ -1,6 +1,8 @@
 #if canImport(MatrixRustSDK)
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
+#endif
 import MatrixRustSDK
 import MSNKit
 #if canImport(UniformTypeIdentifiers)
@@ -120,12 +122,30 @@ public final class MatrixClient: IMService {
 
 	private static var goodbyes: [String: Task<Void, Never>] = [:]
 
-	public nonisolated static var defaultDirectory: URL {
-		FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-			.appendingPathComponent("MessengerMac/Matrix", isDirectory: true)
+	/// Where sessions are kept between launches: the login Keychain, or
+	/// elsewhere a private file per account beside the stores.
+	public nonisolated static var defaultStore: MatrixSessionStore {
+		#if canImport(Security)
+		KeychainMatrixSessionStore()
+		#else
+		FileMatrixSessionStore(directory: defaultDirectory.appendingPathComponent("Sessions", isDirectory: true))
+		#endif
 	}
 
-	public init(homeserver: URL? = nil, store: MatrixSessionStore = KeychainMatrixSessionStore(),
+	/// Where each session's stores (and, off macOS, the sessions) are kept.
+	public nonisolated static var defaultDirectory: URL {
+		#if os(Linux)
+		// Beside the GTK app's own data ($XDG_DATA_HOME/messenger-wlm-matrix).
+		let data = ProcessInfo.processInfo.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0) }
+			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share")
+		return data.appendingPathComponent("messenger-wlm-matrix/Matrix", isDirectory: true)
+		#else
+		return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+			.appendingPathComponent("MessengerMac/Matrix", isDirectory: true)
+		#endif
+	}
+
+	public init(homeserver: URL? = nil, store: MatrixSessionStore = MatrixClient.defaultStore,
 	            directory: URL = MatrixClient.defaultDirectory) {
 		self.homeserver = homeserver
 		self.store = store
@@ -151,7 +171,7 @@ public final class MatrixClient: IMService {
 	/// How `userID` signs in here, so the sign-in window can drop the password
 	/// box: a saved session, else password when offered, else the browser.
 	public nonisolated static func signInMethod(for userID: String, homeserver: URL? = nil,
-	                                            store: MatrixSessionStore = KeychainMatrixSessionStore()) async throws -> SignInMethod {
+	                                            store: MatrixSessionStore = MatrixClient.defaultStore) async throws -> SignInMethod {
 		guard let serverName = MatrixID.serverName(of: userID) else { throw MatrixError.badUserID(userID) }
 		if store.load(userID) != nil { return .savedSession }
 		let base: URL
@@ -1142,11 +1162,17 @@ public final class MatrixClient: IMService {
 		}
 	}
 
+	/// A picture's size, for other clients to lay it out before it loads
+	/// (nil where there's no ImageIO to ask).
 	private nonisolated static func imageSize(_ data: Data) -> (width: Int, height: Int)? {
+		#if canImport(ImageIO)
 		guard let source = CGImageSourceCreateWithData(data as CFData, nil),
 		      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
 		      let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
 		return (width, height)
+		#else
+		return nil
+		#endif
 	}
 
 	public func sendNudge(to peer: String) async throws {
@@ -1158,7 +1184,8 @@ public final class MatrixClient: IMService {
 	public var supportsFileTransfer: Bool { true }
 
 	/// Uploads the file (encrypted first, in an encrypted room) and announces
-	/// it in an m.file message.
+	/// it in an m.file message, or a picture in an m.image, for other clients
+	/// to show it.
 	@discardableResult
 	public func sendFile(_ url: URL, to peer: String) throws -> FileTransfer {
 		guard client != nil else { throw MSNPError.disconnected }
@@ -1171,8 +1198,16 @@ public final class MatrixClient: IMService {
 			let room = try await self.conversationRoom(with: peer)
 			guard let timeline = await self.timeline(for: room.id()) else { throw MatrixError.badResponse("the conversation isn't loaded yet") }
 			let params = UploadParameters(source: .file(filename: url.path), caption: nil, formattedCaption: nil, mentions: nil, inReplyTo: nil)
-			let info = FileInfo(mimetype: Self.mimeType(of: url), size: size, thumbnailInfo: nil, thumbnailSource: nil)
-			let upload = try timeline.sendFile(params: params, fileInfo: info)
+			let head = (try? FileHandle(forReadingFrom: url))?.readData(ofLength: 12) ?? Data()
+			let image = MatrixMessage.imageMimeType(head)
+			let upload: SendAttachmentJoinHandle
+			if image.hasPrefix("image/") {
+				upload = try timeline.sendImage(params: params, thumbnailSource: nil, imageInfo: ImageInfo(
+					height: nil, width: nil, mimetype: image, size: size, thumbnailInfo: nil, thumbnailSource: nil, blurhash: nil, isAnimated: nil))
+			} else {
+				upload = try timeline.sendFile(params: params, fileInfo: FileInfo(
+					mimetype: Self.mimeType(of: url), size: size, thumbnailInfo: nil, thumbnailSource: nil))
+			}
 			try await withTaskCancellationHandler { try await upload.join() } onCancel: { upload.cancel() }
 			return nil
 		}

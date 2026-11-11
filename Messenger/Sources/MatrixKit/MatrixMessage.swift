@@ -100,10 +100,11 @@ public enum MatrixMessage {
 		return (name.isEmpty ? "file" : name, url, UInt64(max(content["info"]["size"].int ?? 0, 0)))
 	}
 
-	/// An m.file message for an uploaded file.
+	/// The message for an uploaded file: m.image for a picture (so that other
+	/// clients show it), else m.file.
 	public static func file(name: String, url: String, size: UInt64, mimeType: String) -> JSON {
-		["msgtype": "m.file", "body": .string(name), "filename": .string(name), "url": .string(url),
-		 "info": ["size": .number(Double(size)), "mimetype": .string(mimeType)]]
+		["msgtype": mimeType.hasPrefix("image/") ? "m.image" : "m.file", "body": .string(name), "filename": .string(name),
+		 "url": .string(url), "info": ["size": .number(Double(size)), "mimetype": .string(mimeType)]]
 	}
 
 	/// The MIME type of image data, from its first bytes.

@@ -145,6 +145,7 @@ final class ConversationWindow {
 			return true
 		}
 		insert("Never give out your password or credit card number in an instant message conversation.\n", markup: false, muted: true)
+		loadHistory()
 		refreshPictures()
 		if participants.count > 1 { refreshHeader() }
 	}
@@ -262,7 +263,32 @@ final class ConversationWindow {
 
 	// MARK: Transcript
 
+	/// What is posted while the earlier messages are being fetched waits here:
+	/// the transcript only grows at its end, and they belong above.
+	private var waiting: [ChatLine.Kind]? = []
+
+	/// Earlier messages, greyed, then whatever arrived in the meantime.
+	private func loadHistory() {
+		Task { [weak self] in
+			let history = await AppState.shared.history(with: self?.peer ?? "")
+			guard let self else { return }
+			for m in history {
+				let when = Self.time.string(from: m.date)
+				self.insert("\(m.senderName) (\(when)):\n    ", markup: false, muted: true)
+				if let picture = m.picture { self.insertPicture(picture) } else { self.insert(m.text, markup: false, muted: true) }
+				self.insert("\n", markup: false)
+			}
+			let posts = self.waiting ?? []
+			self.waiting = nil
+			posts.forEach { self.post($0) }
+		}
+	}
+
 	func post(_ kind: ChatLine.Kind) {
+		if waiting != nil {
+			waiting?.append(kind)
+			return
+		}
 		switch kind {
 		case let .message(sender, text, fmt, outgoing):
 			insertEmoticonText("\(sender) says:", style: "foreground=\"#777777\"")

@@ -13,6 +13,11 @@ case "${VARIANT:-escargot}" in
 	*) echo "VARIANT is escargot or matrix" >&2; exit 2 ;;
 esac
 
+# Messenger for Matrix has end-to-end encryption when matrix-rust-sdk is built
+# for it (about 15 minutes, once; needs Rust). Without, it's the plain client.
+if [ "${VARIANT:-escargot}" = matrix ] && ! "$HERE/build-matrix-sdk.sh"; then
+	echo "Building Messenger for Matrix without end-to-end encryption." >&2
+fi
 swift build -c release --package-path "$PKG" --scratch-path "$SCRATCH" --product "$PRODUCT"
 mkdir -p "$HOME/.local/bin"
 install -m 755 "$SCRATCH/release/$PRODUCT" "$HOME/.local/bin/$NAME"

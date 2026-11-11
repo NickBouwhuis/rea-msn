@@ -1,7 +1,9 @@
 #if canImport(MatrixRustSDK)
 import Foundation
 import MatrixRustSDK
+#if canImport(Security)
 import Security
+#endif
 
 /// A signed-in Matrix session on this machine: the SDK's tokens, plus where
 /// its local store lives and the passphrase that encrypts it. Keeping the
@@ -48,6 +50,7 @@ public protocol MatrixSessionStore: AnyObject, Sendable {
 	func delete(_ userID: String)
 }
 
+#if canImport(Security)
 /// Sessions in the login Keychain (one generic-password item per account).
 public final class KeychainMatrixSessionStore: MatrixSessionStore, @unchecked Sendable {
 	private let service: String
@@ -82,6 +85,42 @@ public final class KeychainMatrixSessionStore: MatrixSessionStore, @unchecked Se
 
 	public func delete(_ userID: String) {
 		SecItemDelete(query(userID) as CFDictionary)
+	}
+}
+#endif
+
+/// Sessions in a folder only the user can read, a file per account (Linux).
+/// shortcut: a private file, not the desktop's keyring; move to libsecret
+/// (as the GTK app's remembered passwords are) if other local users or
+/// backups of the home folder are a concern.
+public final class FileMatrixSessionStore: MatrixSessionStore, @unchecked Sendable {
+	private let directory: URL
+
+	public init(directory: URL) {
+		self.directory = directory
+	}
+
+	private func file(_ userID: String) -> URL {
+		directory.appendingPathComponent(MatrixAPI.segment(userID) + ".json")
+	}
+
+	public func load(_ userID: String) -> StoredMatrixSession? {
+		(try? Data(contentsOf: file(userID))).flatMap { try? JSONDecoder().decode(StoredMatrixSession.self, from: $0) }
+	}
+
+	public func save(_ session: StoredMatrixSession) {
+		guard let data = try? JSONEncoder().encode(session) else { return }
+		try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+		let path = file(session.userID).path
+		// Created private, then filled: never readable by others, even briefly.
+		if !FileManager.default.fileExists(atPath: path) {
+			FileManager.default.createFile(atPath: path, contents: nil, attributes: [.posixPermissions: 0o600])
+		}
+		try? data.write(to: URL(fileURLWithPath: path))
+	}
+
+	public func delete(_ userID: String) {
+		try? FileManager.default.removeItem(at: file(userID))
 	}
 }
 

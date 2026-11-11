@@ -895,9 +895,10 @@ public final class MatrixClient: IMService {
 			let room = try await self.conversationRoom(with: peer)
 			// shortcut: the whole file passes through memory; stream it if very large files matter.
 			let data = try Data(contentsOf: url)
-			let mxc = try await api.upload(data, filename: name, mimeType: "application/octet-stream")
+			let type = MatrixMessage.imageMimeType(data)  // a picture's, else application/octet-stream
+			let mxc = try await api.upload(data, filename: name, mimeType: type)
 			try Task.checkCancellation()
-			try await self.send(MatrixMessage.file(name: name, url: mxc, size: UInt64(data.count), mimeType: "application/octet-stream"), to: room)
+			try await self.send(MatrixMessage.file(name: name, url: mxc, size: UInt64(data.count), mimeType: type), to: room)
 			return nil
 		}
 		return transfer

@@ -41,6 +41,9 @@ final class MainWindow {
 	private var selectedRow: Ptr?
 	/// "Start a group conversation...", shown where the service has groups to start.
 	private var newGroupItem: Ptr?
+	/// "Verify this session...", shown while a session with encryption isn't verified.
+	private var verifyItem: Ptr?
+	private let verificationDialog = VerificationDialog()
 
 	init(app: Ptr) {
 		(window, _) = Chrome.window(app: app, width: 310, height: 700)
@@ -55,6 +58,10 @@ final class MainWindow {
 		state.onProfile.append { [weak self] in self?.refreshMe() }
 		state.onPictures.append { [weak self] in self?.refreshMePicture() }
 		state.onAddRequest = { [weak self] in self?.showAddRequests() }
+		state.onVerification = { [weak self] in
+			guard let self else { return }
+			self.verificationDialog.update(parent: self.window)
+		}
 		phaseChanged()
 	}
 
@@ -353,6 +360,7 @@ final class MainWindow {
 		// The menu button: what the Contacts menu holds on macOS.
 		let menu = vbox(0)
 		let (contactsButton, contactsPopover) = menuButton(picture(skin.image(R.viewMenu)), content: menu, css: ["wlm-flat"])
+		gtk_widget_set_tooltip_text(c(contactsButton), "Contacts menu")
 		append(menu, menuItem(skin.string(49110, "Add a contact") + "...") { [weak self] in
 			popdown(contactsPopover)
 			self?.promptAddContact()
@@ -363,6 +371,12 @@ final class MainWindow {
 		}
 		newGroupItem = newGroup
 		append(menu, newGroup)
+		let verify = menuItem("Verify this session...") {
+			popdown(contactsPopover)
+			AppState.shared.verification = .prompt
+		}
+		verifyItem = verify
+		append(menu, verify)
 		append(searchRow, contactsButton)
 		append(book, searchRow)
 		list = vbox(0)
@@ -391,6 +405,7 @@ final class MainWindow {
 	private func rebuildList() {
 		guard state.phase == .signedIn else { return }
 		if let newGroupItem { visible(newGroupItem, state.client?.supportsNamedGroups == true) }
+		if let verifyItem { visible(verifyItem, state.sessionUnverified) }
 		selectedRow = nil
 		removeAllChildren(list)
 		let q = text(of: search).lowercased()
