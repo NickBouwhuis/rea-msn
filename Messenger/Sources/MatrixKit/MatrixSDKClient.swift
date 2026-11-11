@@ -122,13 +122,15 @@ public final class MatrixClient: IMService {
 
 	private static var goodbyes: [String: Task<Void, Never>] = [:]
 
-	/// Where sessions are kept between launches: the login Keychain, or
-	/// elsewhere a private file per account beside the stores.
+	/// Where sessions are kept between launches: the login Keychain, or on
+	/// Linux the desktop's keyring (else a private file per account beside
+	/// the stores).
 	public nonisolated static var defaultStore: MatrixSessionStore {
 		#if canImport(Security)
 		KeychainMatrixSessionStore()
 		#else
-		FileMatrixSessionStore(directory: defaultDirectory.appendingPathComponent("Sessions", isDirectory: true))
+		SecretToolMatrixSessionStore(fallback: FileMatrixSessionStore(
+			directory: defaultDirectory.appendingPathComponent("Sessions", isDirectory: true)))
 		#endif
 	}
 

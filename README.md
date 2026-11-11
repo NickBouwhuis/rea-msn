@@ -173,18 +173,18 @@ onto Matrix like this:
 
 Messenger is a session (device) on your account like any other. On macOS it keeps the session in the
 Keychain, with its encryption keys in a passphrase-protected store under
-`~/Library/Application Support/MessengerMac/Matrix`; on Linux both are under
-`~/.local/share/messenger-wlm-matrix/Matrix`, the session in a file only you can read (not yet in the
-desktop's keyring). So it stays the same session, and stays
+`~/Library/Application Support/MessengerMac/Matrix`; on Linux the session is in the desktop's keyring
+(through `secret-tool`, from `libsecret-tools`; without it, in a file only you can read) and the store
+under `~/.local/share/messenger-wlm-matrix/Matrix`. So it stays the same session, and stays
 verified, between launches. "Sign out" keeps it when "Remember me" is ticked, and logs it out
 otherwise. After the first sign-in Messenger asks you to verify the session, by comparing emoji with
 Element or another of your sessions (either side can start), or with your recovery key (Actions ▸
 Verify This Session). Until then, other people's apps may not share message keys with it.
 Messages that can't be decrypted yet show a notice; the message follows if its key arrives later.
 Opening a conversation shows the last 30 messages from before you signed in, greyed (reloaded once
-you verify, when your other sessions and key backup can supply their keys). Paste or drop a picture
-into the message box to send it (HEIC and TIFF go as JPEG); pictures show in the conversation, and
-double-clicking one opens it.
+you verify, when your other sessions and key backup can supply their keys). Paste a picture into the
+message box to send it (on macOS, dropping one works too, and HEIC and TIFF go as JPEG); pictures show
+in the conversation, and on macOS double-clicking one opens it.
 
 Not supported yet:
 - Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
@@ -192,8 +192,6 @@ Not supported yet:
 - Voice and video.
 - Presence comes from polling every 10 seconds (the SDK doesn't expose presence events). On servers
   with presence turned off, contacts always look Offline, but you can still message them.
-- Linux: pasting a picture into the message box (Share Files sends one), and the session isn't kept
-  in the keyring.
 
 ## Testing
 

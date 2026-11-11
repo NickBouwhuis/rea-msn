@@ -384,6 +384,15 @@ final class AppState {
 
 	func typing(to peer: String) { client?.sendTyping(to: peer) }
 
+	/// Whether the current service sends pictures as messages (Matrix).
+	var supportsPictures: Bool { client?.supportsPictures ?? false }
+
+	func sendPicture(_ png: Data, to peer: String) {
+		guard let client else { return }
+		openConversation(peer, present: false).post(.picture(senderName: myName, data: png, outgoing: true))
+		Task { await client.sendPicture(to: peer, data: png, filename: "Picture.png") }
+	}
+
 	func nudge(_ peer: String) {
 		guard let client else { return }
 		let w = openConversation(peer, present: false)

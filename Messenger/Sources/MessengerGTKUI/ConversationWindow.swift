@@ -130,6 +130,15 @@ final class ConversationWindow {
 				self.send()
 				return true
 			}
+			// Ctrl+V with a picture on the clipboard: offer to send it (text pastes as ever).
+			if keyval == 0x76, state & 4 != 0, self.state.supportsPictures {  // v, GDK_CONTROL_MASK
+				return clipboardPicture(of: self.input) { [weak self] png in
+					guard let self, let png else { return }
+					Dialog.confirm("Send the picture you pasted to \(self.state.name(of: self.peer))?", ok: "Send", parent: self.window) {
+						self.state.sendPicture(png, to: self.peer)
+					}
+				}
+			}
 			return false
 		}
 		on(raw(gtk_text_view_get_buffer(c(input))), "changed") { [weak self] in self?.typed() }

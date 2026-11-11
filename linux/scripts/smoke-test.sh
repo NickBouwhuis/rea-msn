@@ -6,14 +6,15 @@
 # Synapse, fresh (alice, bob and carol, password 123456), through its group
 # conversation features; the other people are played over the Matrix API. With
 # MSNCTL (the msnctl binary, built on matrix-rust-sdk), it is also verified
-# by emoji against another session of the account.
+# by emoji against another session of the account, and a picture is pasted.
+# With KEYRING=1 (a keyring runs in the session), the session must be in it.
 # SCENARIO=escargot: Windows Live Messenger against devserver's Escargot
 # server: signs in, has no Matrix items in its menu, and gets a message that
 # MSNCTL (the msnctl binary) sends as Bob.
 #
 # Needs a display with a window manager's worth of room (xvfb-run), a session
 # bus (dbus-run-session), and: openbox xdotool imagemagick at-spi2-core
-# gir1.2-atspi-2.0 python3-gi curl jq.
+# gir1.2-atspi-2.0 python3-gi curl jq (and xclip, libsecret-tools, gnome-keyring).
 #
 #   APP=path/to/MatrixMessengerGTK OUT=smoke \
 #     dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
@@ -85,14 +86,15 @@ KEEPER=$!
 KEEPER=
 RESPONDER=
 APP_PID=
+APP_HOME=
+ENCRYPTING=
 trap 'kill $APP_PID $KEEPER $RESPONDER 2>/dev/null' EXIT
 # launch NAME=VALUE...: the app, signed in through its development hooks.
 launch() {
 	openbox >/dev/null 2>&1 &
 	sleep 1
-	local home
-	home="$(mktemp -d)"
-	env GSK_RENDERER=cairo GDK_BACKEND=x11 XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" MESSENGER_DEBUG=1 "$@" \
+	APP_HOME="$(mktemp -d)"
+	env GSK_RENDERER=cairo GDK_BACKEND=x11 XDG_CONFIG_HOME="$APP_HOME/config" XDG_DATA_HOME="$APP_HOME/data" MESSENGER_DEBUG=1 "$@" \
 		"$APP" >"$OUT/app-$SCENARIO.log" 2>&1 &
 	APP_PID=$!
 }
@@ -228,6 +230,7 @@ shot 02-contact-list
 # be verified. (Not the plain client, nor an account's first session, which
 # sets up cross-signing itself.)
 if appears "Verify this session" 40 --exact; then
+	ENCRYPTING=1
 	say "Verifying this session: the recovery key's page, then emoji with the other session"
 	shot 02a-verify-this-session
 	press "Use recovery key" --exact
@@ -298,6 +301,28 @@ press "Contacts menu" --exact && press "Add a contact..." --exact && type_in "Ad
 say "Invite in a one-to-one conversation: a group of its own opens"
 double_click "Bob" --exact --in "$MAIN" && wait_for "Bob" --in "Bob" && {
 	place "Bob" 420 20
+	if [ -n "$ENCRYPTING" ]; then
+		# Pasting a picture into the message box (the second text box; the
+		# first is the transcript) asks, then sends it.
+		convert -size 48x48 xc:tomato "$OUT/pasted.png"
+		xclip -selection clipboard -t image/png -i "$OUT/pasted.png"
+		click 1 "" --role text --in "Bob" --nth 1
+		xdotool key ctrl+v
+		if appears "Send the picture you pasted to Bob?" 15; then
+			shot 12a-paste-confirmation
+			press "Send" --exact --in "$MAIN"
+			shot 12b-picture-sent 3
+			if api "$B" GET "/rooms/$(enc "$dm_bob")/messages?dir=b&limit=10" | jq -e '[.chunk[] | select(.content.msgtype == "m.image")] | length > 0' >/dev/null; then
+				echo "the picture reached Bob"
+			else
+				echo "!! no picture reached Bob"
+				FAILED=1
+			fi
+		else
+			echo "!! pasting a picture didn't ask to send it"
+			FAILED=1
+		fi
+	fi
 	press "Invite" --in "Bob"
 	shot 13-invite-menu
 	press "Carol" --exact --in "Bob" && wait_for "Alice, Bob, Carol" --in "Alice, Bob, Carol" && {
@@ -315,6 +340,20 @@ if at find "Weekend plans" --in "$MAIN" >/dev/null 2>&1; then
 fi
 shot 15-after-leaving
 at dump >"$OUT/tree-final.txt"
+
+if [ -n "${KEYRING:-}" ] && [ -n "$ENCRYPTING" ]; then
+	say "The session is kept in the keyring, not in a file"
+	if secret-tool lookup application messenger-wlm-matrix-session account @alice:localhost | jq -e '.accessToken | length > 0' >/dev/null 2>&1; then
+		echo "it is in the keyring"
+	else
+		echo "!! no session in the keyring"
+		FAILED=1
+	fi
+	if ls "$APP_HOME/data/messenger-wlm-matrix/Matrix/Sessions"/*.json >/dev/null 2>&1; then
+		echo "!! there is a session file too"
+		FAILED=1
+	fi
+fi
 }
 
 case "$SCENARIO" in

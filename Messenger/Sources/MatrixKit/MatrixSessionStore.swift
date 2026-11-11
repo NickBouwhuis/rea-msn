@@ -89,10 +89,64 @@ public final class KeychainMatrixSessionStore: MatrixSessionStore, @unchecked Se
 }
 #endif
 
-/// Sessions in a folder only the user can read, a file per account (Linux).
-/// shortcut: a private file, not the desktop's keyring; move to libsecret
-/// (as the GTK app's remembered passwords are) if other local users or
-/// backups of the home folder are a concern.
+/// Sessions in the desktop's keyring (Linux), through libsecret's secret-tool
+/// as the GTK app keeps remembered passwords. Where secret-tool isn't
+/// installed or no keyring answers, they go to `fallback`: private files.
+public final class SecretToolMatrixSessionStore: MatrixSessionStore, @unchecked Sendable {
+	private let application: String
+	private let fallback: FileMatrixSessionStore
+
+	public init(application: String = "messenger-wlm-matrix-session", fallback: FileMatrixSessionStore) {
+		self.application = application
+		self.fallback = fallback
+	}
+
+	/// Runs secret-tool; its output if it succeeded.
+	private func tool(_ arguments: [String], input: Data? = nil) -> Data? {
+		let p = Process()
+		p.executableURL = URL(fileURLWithPath: "/usr/bin/secret-tool")
+		guard FileManager.default.isExecutableFile(atPath: p.executableURL!.path) else { return nil }
+		p.arguments = arguments
+		let out = Pipe(), inp = Pipe()
+		p.standardOutput = out
+		p.standardInput = inp
+		p.standardError = FileHandle.nullDevice
+		do { try p.run() } catch { return nil }
+		if let input { inp.fileHandleForWriting.write(input) }
+		try? inp.fileHandleForWriting.close()
+		let output = out.fileHandleForReading.readDataToEndOfFile()
+		p.waitUntilExit()
+		return p.terminationStatus == 0 ? output : nil
+	}
+
+	private func attributes(_ userID: String) -> [String] {
+		["application", application, "account", userID]
+	}
+
+	public func load(_ userID: String) -> StoredMatrixSession? {
+		if let data = tool(["lookup"] + attributes(userID)), let session = try? JSONDecoder().decode(StoredMatrixSession.self, from: data) {
+			return session
+		}
+		return fallback.load(userID)
+	}
+
+	public func save(_ session: StoredMatrixSession) {
+		guard let data = try? JSONEncoder().encode(session) else { return }
+		if tool(["store", "--label=Messenger for Matrix (\(session.userID))"] + attributes(session.userID), input: data) != nil {
+			fallback.delete(session.userID)  // no copy outside the keyring
+		} else {
+			fallback.save(session)
+		}
+	}
+
+	public func delete(_ userID: String) {
+		_ = tool(["clear"] + attributes(userID))
+		fallback.delete(userID)
+	}
+}
+
+/// Sessions in a folder only the user can read, a file per account: where
+/// there is no keyring to keep them in.
 public final class FileMatrixSessionStore: MatrixSessionStore, @unchecked Sendable {
 	private let directory: URL
 

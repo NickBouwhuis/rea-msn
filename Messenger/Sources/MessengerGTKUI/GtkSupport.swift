@@ -103,6 +103,34 @@ func setPicture(_ p: Ptr, data: Data?, fallback: String?) {
 	}
 }
 
+private final class DataCallback {
+	let fn: (Data?) -> Void
+	init(_ fn: @escaping (Data?) -> Void) { self.fn = fn }
+}
+
+/// Reads the picture on the clipboard, as PNG, for `done`; false if the
+/// clipboard holds no picture (and `done` is never called).
+func clipboardPicture(of widget: Ptr, _ done: @escaping (Data?) -> Void) -> Bool {
+	guard let clipboard = gtk_widget_get_clipboard(c(widget)),
+	      gdk_content_formats_contain_gtype(gdk_clipboard_get_formats(clipboard), gdk_texture_get_type()) != 0 else { return false }
+	let box = Unmanaged.passRetained(DataCallback(done)).toOpaque()
+	let cb: GAsyncReadyCallback = { source, result, data in
+		let callback = Unmanaged<DataCallback>.fromOpaque(data!).takeRetainedValue()
+		var picture: Data?
+		if let texture = gdk_clipboard_read_texture_finish(OpaquePointer(source), result, nil) {
+			if let bytes = gdk_texture_save_to_png_bytes(texture) {
+				var size: gsize = 0
+				if let start = g_bytes_get_data(bytes, &size) { picture = Data(bytes: start, count: Int(size)) }
+				g_bytes_unref(bytes)
+			}
+			g_object_unref(UnsafeMutableRawPointer(texture))
+		}
+		callback.fn(picture)
+	}
+	gdk_clipboard_read_texture_async(clipboard, nil, cb, box)
+	return true
+}
+
 private final class PathsCallback {
 	let fn: ([String]) -> Void
 	init(_ fn: @escaping ([String]) -> Void) { self.fn = fn }
