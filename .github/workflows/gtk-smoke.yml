@@ -28,7 +28,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ pkg-config libcurl4-openssl-dev libxml2-dev \
             libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev \
             xvfb openbox xdotool imagemagick dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi jq
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cache
         with:
           path: |
             ~/.local/share/swiftly
@@ -51,6 +52,13 @@ jobs:
         run: |
           . "$HOME/.local/share/swiftly/env.sh"
           swift build --product MatrixMessengerGTK
+      - uses: actions/cache/save@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.local/share/swiftly
+            Messenger/.build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - name: Start Synapse
         run: |
           docker compose -f devserver/matrix/docker-compose.yml up -d

@@ -97,6 +97,11 @@ click() {
 	xdotool click "$button"
 	sleep 1
 }
+# press TEXT [find options]: a button or menu item, through its accessible action.
+press() {
+	if at press "$@"; then echo "press: $*"; else echo "!! nothing to press: $*"; FAILED=1; return 1; fi
+	sleep 1
+}
 double_click() {
 	local pos
 	pos=$(at find "$@") || { echo "!! nothing to double-click: $*"; FAILED=1; return 1; }
@@ -121,7 +126,7 @@ shot 01-signed-in-invitation 2
 at dump >"$OUT/tree-01.txt"
 
 say "Joining it"
-click 1 "OK" --exact
+press "OK" --exact
 sleep 2
 wait_for "Book club" --in "$MAIN"
 place "$MAIN" 20 20
@@ -137,14 +142,14 @@ shot 03-group-window 3
 say "Right-click a group: Rename, Leave; leaving asks first"
 click 3 "Weekend plans" --in "$MAIN"
 shot 04-group-menu
-click 1 "Leave group conversation..."
+press "Leave group conversation..."
 shot 05-leave-confirmation
-click 1 "Cancel" --exact
+press "Cancel" --exact
 
 say "The Contacts menu: start a group conversation"
-click 1 "Contacts menu"
+press "Contacts menu"
 shot 06-contacts-menu
-click 1 "Start a group conversation..."
+press "Start a group conversation..."
 shot 07-new-group-prompt
 xdotool type --delay 40 "Trip planning"
 xdotool key Return
@@ -154,7 +159,7 @@ shot 08-new-group 2
 
 say "Rename it"
 click 3 "Trip planning" --in "$MAIN"
-click 1 "Rename..."
+press "Rename..."
 xdotool key ctrl+a
 xdotool type --delay 40 "Trip to Texel"
 shot 09-rename-prompt
@@ -163,8 +168,8 @@ wait_for "Trip to Texel" --in "$MAIN"
 shot 10-renamed 2
 
 say "Add a contact, with a room's address: joins it"
-click 1 "Contacts menu"
-click 1 "Add a contact..."
+press "Contacts menu"
+press "Add a contact..."
 xdotool type --delay 40 "#open-room:localhost"
 shot 11-add-contact-prompt
 xdotool key Return
@@ -175,17 +180,17 @@ say "Invite in a one-to-one conversation: a group of its own opens"
 double_click "Bob" --exact --in "$MAIN"
 wait_for "Bob" --in "Bob"
 place "Bob" 420 20
-click 1 "Invite" --in "Bob"
+press "Invite" --in "Bob"
 shot 13-invite-menu
-click 1 "Carol" --exact --in "Bob"
+press "Carol" --exact --in "Bob"
 wait_for "Alice, Bob, Carol" --in "Alice, Bob, Carol"
 place "Alice, Bob, Carol" 760 300
 shot 14-group-from-invite 3
 
 say "Leaving a group, after the confirmation"
 click 3 "Weekend plans" --in "$MAIN"
-click 1 "Leave group conversation..."
-click 1 "Leave" --exact
+press "Leave group conversation..."
+press "Leave" --exact
 sleep 3
 if at find "Weekend plans" --in "$MAIN" >/dev/null 2>&1; then
 	echo "!! Weekend plans is still listed"

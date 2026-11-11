@@ -9,6 +9,12 @@ tree (AT-SPI), for linux/scripts/smoke-test.sh.
                                        name or description has (or, with
                                        --exact, is) TEXT, in windows named like
                                        WINDOW
+  smoke-at.py press TEXT [same options]
+                                       presses that widget (or the button it is
+                                       in) through its accessible action: for
+                                       buttons and menu items, which a popover
+                                       puts in a window of its own that can't
+                                       be found on the screen
 """
 import re
 import subprocess
@@ -104,7 +110,7 @@ def main(args):
             print("  " * depth + f"{role} {text(node)!r} {describe(node)!r} {place(node)}"
                   + (f" at {origin(node)}" if depth == 2 else ""))
         return 0
-    if args[:1] == ["find"] and len(args) >= 2:
+    if args[:1] in (["find"], ["press"]) and len(args) >= 2:
         wanted, within, role, nth = args[1], None, None, 0
         rest = [a for a in args[2:] if a != "--exact"]
         exact = "--exact" in args[2:]
@@ -128,9 +134,24 @@ def main(args):
                     continue
             except Exception:
                 continue
-            where, corner = place(node), origin(window)
-            if where and corner:
+            where = place(node)
+            if not where:
+                continue
+            if args[0] == "press":
+                found.append(node)
+            elif corner := origin(window):
                 found.append((corner[0] + where[0] + where[2] // 2, corner[1] + where[1] + where[3] // 2))
+        if len(found) > nth and args[0] == "press":
+            node = found[nth]
+            for _ in range(4):  # a button's label has no action of its own
+                try:
+                    if node.get_n_actions() > 0 and node.do_action(0):
+                        return 0
+                except Exception:
+                    pass
+                node = node.get_parent()
+            print(f"{wanted!r} can't be pressed", file=sys.stderr)
+            return 1
         if len(found) > nth:
             print(*found[nth])
             return 0
