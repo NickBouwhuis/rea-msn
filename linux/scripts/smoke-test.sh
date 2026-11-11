@@ -163,7 +163,10 @@ press "Leave group conversation..." && wait_for "Are you sure you want to leave 
 say "The Contacts menu: start a group conversation"
 press "Contacts menu"
 shot 06-contacts-menu
-press "Start a group conversation..." && type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
+press "Start a group conversation..."
+shot 06b-after-menu-item 2
+at dump >"$OUT/tree-06b.txt"
+type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
 	wait_for "Trip planning" --in "Trip planning"
 	place "Trip planning" 420 400
 	shot 08-new-group 2
