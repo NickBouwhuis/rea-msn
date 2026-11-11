@@ -154,6 +154,11 @@ onto Matrix like this:
 | --- | --- |
 | Contact list | users in `m.direct` with a DM room you're in, plus the other person in any two-person room |
 | "X has added you" | an invite to a direct chat (`is_direct`); declining leaves the room and blocks |
+| Group conversations | every other room with a name or several people in it, listed under "Group conversations"; an invite to one asks whether to join, and "Leave" leaves the room |
+| Invite (in a conversation) | into a group: an invite to its room. Into a one-to-one chat: a new room for the three of you, so the newcomer can't read your DM |
+| Start a Group Conversation, Rename | a new private room (encrypted on macOS) with that name; `m.room.name` |
+| Add a contact, with a room's address | joins the room (`#room:server`, or a room ID) |
+| A room muted in another app | stays quiet (no window, sound or alert) until you open its conversation |
 | Block | `m.ignored_user_list` |
 | Status | presence: Online is `online`, Appear Offline is `offline`, the away-type statuses are `unavailable` (shown as Away) |
 | Personal message | presence `status_msg` |
@@ -175,7 +180,6 @@ into the message box to send it (HEIC and TIFF go as JPEG); pictures show in the
 double-clicking one opens it.
 
 Not supported yet:
-- Group rooms: only one-to-one chats are shown.
 - Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
   Synapse still offer for existing clients.
 - Other files, voice and video. Pictures only.

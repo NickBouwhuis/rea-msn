@@ -8,7 +8,8 @@ public struct MatrixProfile: IMServiceProfile {
 	public var appName: String { "Messenger for Matrix" }
 	public var identifier: String { "matrix" }
 	public var accountLabel: String { "Matrix ID:" }
-	public var contactExample: String { "@someone:matrix.org" }
+	/// A person, or a room to join.
+	public var contactExample: String { "@someone:matrix.org or #room:matrix.org" }
 	public var connection: IMConnectionKind { .matrixHomeserver }
 	public var forgotPasswordURL: URL? { nil }
 	public var serviceStatusURL: URL? { nil }
@@ -19,7 +20,8 @@ public struct MatrixProfile: IMServiceProfile {
 	}
 
 	public func problem(withContact address: String) -> String? {
-		MatrixID.isUserID(address) ? nil : "Please type a Matrix ID, such as @someone:matrix.org."
+		MatrixID.isUserID(address) || MatrixID.isRoomAddress(address) ? nil
+			: "Please type a Matrix ID, such as @someone:matrix.org, or a room's address, such as #room:matrix.org."
 	}
 
 	/// The client decides: a saved session or the browser need none.

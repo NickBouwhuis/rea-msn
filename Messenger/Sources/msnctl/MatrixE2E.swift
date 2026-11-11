@@ -45,6 +45,12 @@ extension CLI {
 				throw MSNPError.unexpected("sign-in succeeded")
 			} catch MatrixError.authenticationFailed {}
 		}
+		if !MatrixClient.supportsEncryption {
+			try await step("reset: A and B leave DMs an encrypting client left encrypted (this one can't write there)") {
+				try await leaveEncryptedDMs(of: idA, password, with: idB)
+				try await leaveEncryptedDMs(of: idB, password, with: idA)
+			}
+		}
 		try await step("A signs in (/login → /sync → presence)") {
 			try await a.signIn(email: idA, password: password)
 		}
@@ -104,6 +110,8 @@ extension CLI {
 			try await groupInDirectCheck(a, idA: idA, idB: idB, idC: idC, password: password, run: run) {
 				received(by: "B", from: idA, $0)
 			}
+			try await groupCheck(a, b, idB: idB, idC: idC, password: password, run: run, prompted: { addedPrompts.contains($0) },
+			                     received: received)
 		}
 		if encrypted {
 			try await step("the server only has ciphertext (m.room.encrypted)") {
@@ -244,6 +252,132 @@ extension CLI {
 		a.onEvent = previous
 	}
 
+	/// Group conversations: A invites C into the conversation with B, which
+	/// makes a group room of its own. B is asked to join it, C joins over the
+	/// raw API, and messages in it arrive under the group, not under their senders.
+	private func groupCheck(_ a: any IMService, _ b: any IMService, idB: String, idC: String, password: String, run: String,
+	                        prompted: @escaping (String) -> Bool,
+	                        received: @escaping (_ tag: String, _ peer: String, _ text: String) -> Bool) async throws {
+		var group = ""
+		try await step("A invites C into the conversation with B: a group of its own") {
+			group = try await a.invite(idC, into: idB)
+			guard group != idB, a.contacts[group]?.isGroup == true, a.contacts[group]?.isForward == true else {
+				throw MSNPError.unexpected("no group on A's list: \(group)")
+			}
+		}
+		try await step("B is asked to join the group, and joins") {
+			try await waitFor("B's invitation") { prompted("B:\(group)") && b.contacts[group]?.isGroup == true }
+			try await b.respondToAdd(group, allow: true, addToList: false)
+			try await waitFor("the group on B's list") { b.contacts[group]?.isForward == true }
+		}
+		let base: URL
+		if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: MatrixID.serverName(of: idC) ?? "") }
+		var c = MatrixAPI(baseURL: base)
+		try await step("C joins too, and A and B see who is in the group") {
+			c.accessToken = try await c.login(user: idC, password: password, deviceID: "WLME2ECAROL", deviceName: "msnctl e2e").accessToken
+			_ = try await c.call("POST", "/join/\(MatrixAPI.segment(group))", body: [:])
+			try await waitFor("the participants") {
+				a.participants(inConversationWith: group) == [idB, idC].sorted() && b.participants(inConversationWith: group) == [a.email, idC].sorted()
+			}
+		}
+		try await step("B → the group, and A's answer: both arrive in the group") {
+			await b.sendMessage(to: group, text: "hello group \(run)")
+			try await waitFor("A receives it in the group") { received("A", group, "hello group \(run)") }
+			await a.sendMessage(to: group, text: "hello to you both \(run)")
+			try await waitFor("B receives it in the group") { received("B", group, "hello to you both \(run)") }
+		}
+		if MatrixClient.supportsEncryption {
+			// Groups get a timeline only once something happens in them.
+			try await step("a later session of B, where the group has been quiet, still gets its next message") {
+				let b2 = makeService("B2")
+				var late: [String] = []
+				b2.onEvent = { event in
+					if case let .conversation(peer, .message(_, _, text, _)) = event { late.append("\(peer): \(text)") }
+				}
+				try await b2.signIn(email: idB, password: password)
+				try await Task.sleep(nanoseconds: 3_000_000_000)  // A hears of B's new device
+				await a.sendMessage(to: group, text: "for the latecomer \(run)")
+				try await waitFor("B's later session receives it") { late.contains("\(group): for the latecomer \(run)") }
+				b2.signOut()
+			}
+		}
+		let muteRule = "/pushrules/global/override/\(MatrixAPI.segment(group))"
+		var apiA = MatrixAPI(baseURL: base)
+		try await step("a group muted elsewhere stays quiet until its conversation is opened") {
+			apiA.accessToken = try await apiA.login(user: a.email, password: password, deviceID: "WLME2EGROUP", deviceName: "msnctl e2e").accessToken
+			_ = try await apiA.call("PUT", muteRule, body: [
+				"conditions": [["kind": "event_match", "key": "room_id", "pattern": .string(group)]], "actions": [],
+			])
+			a.closeConversation(with: group)
+			try await Task.sleep(nanoseconds: 13_000_000_000)  // the SDK client rereads rooms every 10 s
+			await b.sendMessage(to: group, text: "while muted \(run)")
+			try await Task.sleep(nanoseconds: 4_000_000_000)
+			guard !received("A", group, "while muted \(run)") else { throw MSNPError.unexpected("the muted group wasn't quiet") }
+			_ = a.participants(inConversationWith: group)  // what a window does when it opens
+			await b.sendMessage(to: group, text: "after opening \(run)")
+			try await waitFor("A receives it once open") { received("A", group, "after opening \(run)") }
+		}
+		try await step("B leaves the group; A is told") {
+			try await b.removeContact(group)
+			guard b.contacts[group] == nil else { throw MSNPError.unexpected("the group is still on B's list") }
+			try await waitFor("A hears that B left") { received("A", group, "left(email: \"\(idB)\")") }
+		}
+		try await step("reset: A and C leave the group") {
+			try await a.removeContact(group)
+			_ = try? await apiA.call("DELETE", muteRule)
+			_ = try? await apiA.call("POST", "/logout", body: [:])
+			_ = try await c.call("POST", "/rooms/\(MatrixAPI.segment(group))/leave", body: [:])
+		}
+		try await step("A starts a group by name, renames it and leaves it") {
+			let named = try await a.createGroup(named: "E2E named \(run)")
+			guard a.contacts[named]?.isGroup == true, a.contacts[named]?.displayName == "E2E named \(run)" else {
+				throw MSNPError.unexpected("no group called that on A's list")
+			}
+			try await a.renameGroup(named, to: "E2E renamed \(run)")
+			try await waitFor("the new name") { a.contacts[named]?.displayName == "E2E renamed \(run)" }
+			try await a.removeContact(named)
+		}
+		try await step("B joins a public room by its address (\"Add a contact\"), and leaves it") {
+			let alias = "e2e-\(run)", name = "E2E public \(run)"
+			let room = try await c.call("POST", "/createRoom", body: [
+				"preset": "public_chat", "name": .string(name), "room_alias_name": .string(alias),
+			])["room_id"].string ?? ""
+			try await b.addContact("#\(alias):\(MatrixID.serverName(of: idC) ?? "")")
+			try await waitFor("the room on B's list") { b.contacts[room]?.isGroup == true && b.contacts[room]?.displayName == name }
+			try await b.removeContact(room)
+			_ = try await c.call("POST", "/rooms/\(MatrixAPI.segment(room))/leave", body: [:])
+			_ = try? await c.call("POST", "/logout", body: [:])
+		}
+	}
+
+	/// A client without encryption can't write to an encrypted DM, and reuses
+	/// the DM it finds. Runs with the encrypting client leave such DMs behind:
+	/// `user` leaves the ones with `peer`, so that a new one is made.
+	private func leaveEncryptedDMs(of user: String, _ password: String, with peer: String) async throws {
+		let base: URL
+		if let homeserver { base = homeserver } else { base = try await MatrixAPI.discover(serverName: MatrixID.serverName(of: user) ?? "") }
+		var api = MatrixAPI(baseURL: base)
+		api.accessToken = try await api.login(user: user, password: password, deviceID: "WLME2ECHECK", deviceName: "msnctl e2e check").accessToken
+		let path = "/user/\(MatrixAPI.segment(user))/account_data/m.direct"
+		var direct = ((try? await api.call("GET", path)) ?? .null).object
+		let listed = Set(direct[peer]?.array.compactMap(\.string) ?? [])
+		var left: Set<String> = []
+		for room in try await api.call("GET", "/joined_rooms")["joined_rooms"].array.compactMap(\.string) {
+			let segment = MatrixAPI.segment(room)
+			guard (try? await api.call("GET", "/rooms/\(segment)/state/m.room.encryption")) != nil,
+			      let members = try? await api.call("GET", "/rooms/\(segment)/joined_members")["joined"].object.keys,
+			      members.allSatisfy({ $0 == user || $0 == peer }), listed.contains(room) || members.contains(peer) else { continue }
+			_ = try await api.call("POST", "/rooms/\(segment)/leave", body: [:])
+			left.insert(room)
+		}
+		if !left.isEmpty {
+			let kept = listed.subtracting(left).sorted()
+			direct[peer] = kept.isEmpty ? nil : .array(kept.map(JSON.string))
+			_ = try await api.call("PUT", path, body: .object(direct))
+		}
+		_ = try? await api.call("POST", "/logout", body: [:])
+	}
+
 	/// m.direct can list a group room under someone (other apps and bridges do
 	/// that): a message to them must still go to the DM, not to the group.
 	private func groupInDirectCheck(_ a: any IMService, idA: String, idB: String, idC: String, password: String,
@@ -282,6 +416,10 @@ extension CLI {
 		}
 		try await step("reset: A leaves the group, m.direct as it was") {
 			_ = try await api.call("PUT", "/user/\(MatrixAPI.segment(idA))/account_data/m.direct", body: original)
+			// Withdraw the invitations first: B and C would otherwise be asked to join an empty group at every sign-in.
+			for user in [idB, idC] {
+				_ = try? await api.call("POST", "/rooms/\(MatrixAPI.segment(group))/kick", body: ["user_id": .string(user)])
+			}
 			_ = try await api.call("POST", "/rooms/\(MatrixAPI.segment(group))/leave", body: [:])
 			_ = try? await api.call("POST", "/logout", body: [:])
 		}

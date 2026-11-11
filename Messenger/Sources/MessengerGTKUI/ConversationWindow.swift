@@ -32,9 +32,12 @@ final class ConversationWindow {
 
 	init(peer: String) {
 		self.peer = peer
-		participants = [peer]
+		let current = AppState.shared.participants(with: peer)
+		participants = current.isEmpty ? [peer] : current
 		let name = AppState.shared.name(of: peer)
-		let (w, t) = Chrome.window(app: AppState.shared.app, width: 560, height: 520, title: name, subtitle: "<\(peer)>")
+		// A group's ID (a Matrix room's) means nothing to people: no address under its name.
+		let isGroup = AppState.shared.contact(peer)?.isGroup == true
+		let (w, t) = Chrome.window(app: AppState.shared.app, width: 560, height: 520, title: name, subtitle: isGroup ? nil : "<\(peer)>")
 		window = w
 		titleBox = t
 
@@ -143,7 +146,11 @@ final class ConversationWindow {
 		}
 		insert("Never give out your password or credit card number in an instant message conversation.\n", markup: false, muted: true)
 		refreshPictures()
+		if participants.count > 1 { refreshHeader() }
 	}
+
+	/// A group that stays (a Matrix room), which has a name and picture of its own.
+	private var isGroup: Bool { state.contact(peer)?.isGroup == true }
 
 	private static func tile(_ skin: Skin) -> (frame: Ptr, picture: Ptr) {
 		let p = picture(skin.image(R.defaultTileLarge), size: (96, 96))
@@ -158,7 +165,7 @@ final class ConversationWindow {
 		let fallback = skin.image(R.defaultTileLarge)
 		setPicture(peerPicture, data: state.displayPicture(of: peer), fallback: fallback)
 		setPicture(myPicture, data: state.displayPicture(of: state.myEmail), fallback: fallback)
-		visible(peerTile, participants.count <= 1)
+		visible(peerTile, participants.count <= 1 || isGroup)
 	}
 
 	func updateParticipants(_ list: [String]) {
@@ -245,7 +252,7 @@ final class ConversationWindow {
 	func close() { gtk_window_destroy(c(window)) }
 
 	func refreshHeader() {
-		let name = participants.count > 1 ? participants.map { state.name(of: $0) }.joined(separator: ", ") : state.name(of: peer)
+		let name = participants.count > 1 && !isGroup ? participants.map { state.name(of: $0) }.joined(separator: ", ") : state.name(of: peer)
 		gtk_window_set_title(c(window), name)
 		if let titleBox, let first = gtk_widget_get_first_child(c(titleBox)) {
 			gtk_box_remove(c(titleBox), first)

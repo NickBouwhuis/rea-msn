@@ -57,6 +57,9 @@ public struct Contact: Identifiable, Hashable {
 	public var capabilities: UInt32 = 0
 	/// The display picture they advertise (`NLN`/`ILN` msnobj), fetched on demand.
 	public var displayPicture: MSNObject?
+	/// A group conversation that stays (a Matrix room) rather than a person:
+	/// `email` is its ID and `displayName` its name.
+	public var isGroup = false
 
 	public init(email: String, displayName: String? = nil) {
 		self.email = email.lowercased()

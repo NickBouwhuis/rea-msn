@@ -8,7 +8,9 @@ import MSNKit
 /// cross-signing verification and key backup. The mapping is the one in
 /// MatrixHTTPClient: direct chats are the contact list, presence and its
 /// status_msg the status and personal message, ignored users the block list,
-/// a DM invite "X has added you". The SDK runs a sync v2 loop; messages come
+/// a DM invite "X has added you". Every other room with a name or several
+/// people in it is a group conversation, listed as a contact of its own
+/// (`isGroup`) under its room ID. The SDK runs a sync v2 loop; messages come
 /// from per-room event subscriptions (already decrypted), presence from
 /// polling, as the SDK doesn't surface presence events.
 ///
@@ -78,10 +80,26 @@ public final class MatrixClient: IMService {
 	/// member counts stay empty.
 	private var members: [String: Set<String>] = [:]
 	private var profilesRequested: Set<String> = []
-	/// Room → the contact a conversation there is with.
+	/// Room → the conversation it is: the contact it's with, or for a group
+	/// room its own ID (groups are contacts with `isGroup`, keyed by room ID).
 	private var roomPeer: [String: String] = [:]
-	/// Inviter → the DM room they invited us to.
+	/// Inviter → the DM room they invited us to; a group room we're invited to → itself.
 	private var invites: [String: String] = [:]
+	/// Group room we're invited to → who invited us.
+	private var groupInviters: [String: String] = [:]
+	/// Groups with an open conversation: the windows ask who is in one
+	/// (`participants`) when they open it, and close it with `closeConversation`.
+	/// Only those report who joins and leaves, as an MSN conversation does
+	/// only while it's open.
+	private var liveGroups: Set<String> = []
+	/// Groups something happened in since sign-in. Only these and the open ones
+	/// are followed: a timeline for every room would make signing in heavy on
+	/// an account with many.
+	private var activeGroups: Set<String> = []
+	/// Rooms muted (in Element, say; a push rule): a muted group stays quiet
+	/// until its conversation is opened.
+	private var muted: Set<String> = []
+	private var notifications: NotificationSettings?
 	private var ignored: Set<String> = []
 	private var names: [String: String] = [:]
 	private var avatarURLs: [String: String] = [:]
@@ -168,6 +186,7 @@ public final class MatrixClient: IMService {
 			_ = try await client.syncOnceV2(settings: SyncSettingsV2(timeoutMs: 0, fullState: false))
 			try stillSigningIn()
 			ignored = Set((try? await client.ignoredUsers()) ?? [])
+			notifications = await client.getNotificationSettings()
 			await loadOwnProfile(personalMessage: psm)
 			await refreshRooms(nil, emit: false)
 			await loadProfiles(Array(contacts.keys))
@@ -179,7 +198,7 @@ public final class MatrixClient: IMService {
 			setState(.signedIn)
 			onEvent?(.profileChanged)
 			for inviter in invites.keys {
-				onEvent?(.addedBy(email: inviter, displayName: name(of: inviter)))
+				onEvent?(.addedBy(email: inviter, displayName: name(of: groupInviters[inviter] ?? inviter)))
 			}
 			watchVerification()
 		} catch {
@@ -340,6 +359,11 @@ public final class MatrixClient: IMService {
 		members = [:]
 		roomPeer = [:]
 		invites = [:]
+		groupInviters = [:]
+		liveGroups = []
+		activeGroups = []
+		muted = []
+		notifications = nil
 		typing = [:]
 		lastTypingSent = [:]
 		for key in contacts.keys { contacts[key]?.status = .offline }
@@ -418,6 +442,7 @@ public final class MatrixClient: IMService {
 
 	private func synced(_ response: SyncResponseV2) async {
 		let ids = response.rooms.joined + response.rooms.invited + response.rooms.left
+		activeGroups.formUnion(response.rooms.joined)
 		if !ids.isEmpty { await refreshRooms(ids, emit: true) }
 	}
 
@@ -428,14 +453,28 @@ public final class MatrixClient: IMService {
 			direct = json.object.mapValues { $0.array.compactMap(\.string) }
 		}
 		let list = ids.map { $0.compactMap { try? client.getRoom(roomId: $0) } } ?? client.rooms()
+		var changes: [(room: String, joined: Set<String>, left: Set<String>)] = []
 		for room in list {
 			let id = room.id()
 			guard let info = try? await room.roomInfo() else { continue }
 			if info.membership == .joined || info.membership == .invited {
 				rooms[id] = room
 				roomInfos[id] = info
+				if info.membership == .joined {
+					// Asked rather than read from RoomInfo, whose cached copy lags behind a change.
+					if (try? await notifications?.getUserDefinedRoomNotificationMode(roomId: id)) == .mute { muted.insert(id) } else { muted.remove(id) }
+				}
 				if info.membership == .joined, let ids = try? await room.activeHumanMemberIdsNoSync() {
-					members[id] = Set(ids)
+					let now = Set(ids), before = members[id]
+					members[id] = now
+					guard now != before else { continue }
+					// Who is who in a group: its members' names, as the room has them.
+					if now.count > 2, let all = try? await room.membersNoSync() {
+						while let chunk = all.nextChunk(chunkSize: 200) {
+							for member in chunk { learn(member.userId, name: member.displayName, avatar: member.avatarUrl) }
+						}
+					}
+					if let before { changes.append((id, now.subtracting(before), before.subtracting(now))) }
 				}
 			} else {
 				rooms[id] = nil
@@ -443,39 +482,57 @@ public final class MatrixClient: IMService {
 			}
 		}
 		rebuildContacts(emit: emit)
+		for change in changes where emit && liveGroups.contains(change.room) && roomPeer[change.room] == change.room {
+			for user in change.joined { onEvent?(.conversation(peer: change.room, .joined(email: user, displayName: name(of: user)))) }
+			for user in change.left { onEvent?(.conversation(peer: change.room, .left(email: user))) }
+		}
 	}
 
 	/// Contacts are everyone m.direct lists with a room we're in, plus the other
 	/// person in any other two-person room (allowed, not listed), ignored users
-	/// (blocked) and DM inviters.
+	/// (blocked) and DM inviters; and the group rooms, each a contact of its own.
 	private func rebuildContacts(emit: Bool) {
 		var peers: [String: String] = [:]
 		var lists: [String: MSNList] = [:]
 		var invitesNow: [String: String] = [:]
+		var groups: [String: String] = [:]
 		var directPeer: [String: String] = [:]
 		for (user, ids) in direct where user != email {
 			for id in ids { directPeer[id] = user }
 		}
 		for (id, info) in roomInfos {
 			for hero in info.heroes { learn(hero.userId, name: hero.displayName, avatar: hero.avatarUrl) }
+			let named = info.rawName?.isEmpty == false
 			switch info.membership {
 			case .joined:
+				let others = (members[id] ?? []).subtracting([email])
 				if let peer = directPeer[id], isOneToOne(id, with: peer) {
 					peers[id] = peer
 					lists[peer, default: []].formUnion([.forward, .allow])
-				} else if let others = members[id]?.subtracting([email]), others.count == 1, members[id]?.count == 2,
-				          let peer = others.first {
+				} else if !named, others.count == 1, members[id]?.count == 2, let peer = others.first {
 					peers[id] = peer
 					lists[peer, default: []].insert(.allow)
+				} else if !info.isSpace, named || others.count >= 2 {
+					// A group: any other room with a name or several people in it (a
+					// nameless room nobody else is in is an abandoned chat).
+					groups[id] = info.rawName.flatMap { $0.isEmpty ? nil : $0 } ?? others.sorted().map(name(of:)).joined(separator: ", ")
+					peers[id] = id
+					lists[id, default: []].insert(.forward)
 				}
 			case .invited:
-				guard let inviter = info.inviter, inviter.userId != email, info.isDirect || info.rawName == nil,
-				      !ignored.contains(inviter.userId) else { continue }
+				guard let inviter = info.inviter, inviter.userId != email, !ignored.contains(inviter.userId) else { continue }
 				learn(inviter.userId, name: inviter.displayName, avatar: inviter.avatarUrl)
-				invitesNow[inviter.userId] = id
+				if info.isDirect || !named {
+					invitesNow[inviter.userId] = id
+				} else if !info.isSpace {
+					groups[id] = info.rawName
+					groupInviters[id] = inviter.userId
+					invitesNow[id] = id
+				}
 			default:
 				break
 			}
+			if groups[id] != nil { avatarURLs[id] = info.avatarUrl }
 		}
 		for user in ignored {
 			lists[user, default: []].remove(.allow)
@@ -489,18 +546,24 @@ public final class MatrixClient: IMService {
 
 		var next: [String: Contact] = [:]
 		for (user, l) in lists {
-			var c = Contact(email: user, displayName: name(of: user))
+			var c = Contact(email: user, displayName: groups[user] ?? name(of: user))
 			c.email = user
 			c.lists = l
-			c.status = presence[user] ?? .offline
-			c.personalMessage = statusMessages[user] ?? ""
+			if groups[user] != nil {
+				c.isGroup = true
+				c.status = .online  // a room is always there
+				c.personalMessage = roomInfos[user]?.topic ?? ""
+			} else {
+				c.status = presence[user] ?? .offline
+				c.personalMessage = statusMessages[user] ?? ""
+			}
 			next[user] = c
 		}
 		let old = contacts
 		contacts = next
 		displayPicture = picture(myAvatarURL)
 		fetchPictures()
-		let unnamed = next.keys.filter { names[$0] == nil && !profilesRequested.contains($0) }
+		let unnamed = next.keys.filter { groups[$0] == nil && names[$0] == nil && !profilesRequested.contains($0) }
 		if !unnamed.isEmpty {
 			profilesRequested.formUnion(unnamed)
 			tasks.append(Task {
@@ -510,13 +573,14 @@ public final class MatrixClient: IMService {
 		}
 		guard emit else { return }
 		for (user, c) in next where old[user] != c {
-			onEvent?(.contactUpdated(c, previousStatus: old[user]?.status ?? .offline))
+			// A group was never offline: no "has just signed in" for a new one.
+			onEvent?(.contactUpdated(c, previousStatus: old[user]?.status ?? (c.isGroup ? c.status : .offline)))
 		}
 		for (user, c) in old where c.isForward && next[user]?.isForward != true {
 			onEvent?(.contactRemoved(email: user))
 		}
 		for inviter in newInvites {
-			onEvent?(.addedBy(email: inviter, displayName: name(of: inviter)))
+			onEvent?(.addedBy(email: inviter, displayName: name(of: groupInviters[inviter] ?? inviter)))
 		}
 	}
 
@@ -527,6 +591,19 @@ public final class MatrixClient: IMService {
 
 	private func name(of user: String) -> String {
 		names[user] ?? MatrixID.localpart(of: user)
+	}
+
+	/// People in a group needn't be contacts: the name their room gives them.
+	public func bestName(of email: String, fallback: String?) -> String {
+		contacts[email]?.displayName ?? names[email] ?? fallback ?? MatrixID.localpart(of: email)
+	}
+
+	/// A message's sender, learning the name the room gives them on the way.
+	private func senderName(_ item: EventTimelineItem) -> String {
+		if case let .ready(displayName, _, avatarUrl, _, _) = item.senderProfile {
+			learn(item.sender, name: displayName, avatar: avatarUrl)
+		}
+		return name(of: item.sender)
 	}
 
 	private func picture(_ mxc: String?) -> Data? {
@@ -626,7 +703,7 @@ public final class MatrixClient: IMService {
 
 	private func pollPresence() async {
 		guard let client, let api = Self.api(client) else { return }
-		let users = contacts.values.filter { !$0.lists.isDisjoint(with: [.forward, .allow]) }.map(\.email)
+		let users = contacts.values.filter { !$0.isGroup && !$0.lists.isDisjoint(with: [.forward, .allow]) }.map(\.email)
 		let found = await withTaskGroup(of: (String, JSON?).self) { group in
 			for user in users {
 				group.addTask { (user, try? await api.call("GET", "/presence/\(MatrixAPI.segment(user))/status")) }
@@ -643,15 +720,26 @@ public final class MatrixClient: IMService {
 
 	// MARK: - Conversations (incoming)
 
-	/// Follows every room a contact is in: a timeline for messages (it shows
+	/// Whether room `id` is followed: every room a contact is in; a group while
+	/// its conversation is open, or once something happens in it, unless it
+	/// was muted (in Element, say), which keeps it quiet until it's opened.
+	private func follows(_ id: String) -> Bool {
+		guard let peer = roomPeer[id] else { return false }
+		if peer != id || liveGroups.contains(id) { return true }
+		return activeGroups.contains(id) && !muted.contains(id)
+	}
+
+	/// Follows rooms (see `follows`): a timeline for messages (it shows
 	/// undecryptable ones and decrypts them when keys arrive later) and typing.
 	private func watchConversations() {
-		for (id, hs) in roomHandles where roomPeer[id] == nil {
+		for (id, hs) in roomHandles where !follows(id) {
 			for h in hs { h.cancel() }
 			roomHandles[id] = nil
 			timelines[id] = nil
+			roomItems[id] = nil
+			typing[id] = nil
 		}
-		for id in roomPeer.keys where roomHandles[id] == nil {
+		for id in roomPeer.keys where follows(id) && roomHandles[id] == nil {
 			guard let room = rooms[id] else { continue }
 			roomHandles[id] = [room.subscribeToTypingNotifications(listener: TypingListener { [weak self] users in
 				Task { @MainActor in self?.typingChanged(users, room: id) }
@@ -690,7 +778,7 @@ public final class MatrixClient: IMService {
 			      !ignored.contains(item.sender), case let .msgLike(content) = item.content,
 			      // Like WLM, conversations start when you sign in.
 			      Double(item.timestamp) / 1000 >= signedInAt.timeIntervalSince1970 - 10 else { continue }
-			let sender = item.sender, name = name(of: sender)
+			let sender = item.sender, name = senderName(item)
 			switch content.kind {
 			case .unableToDecrypt:
 				guard delivered[eventID] == nil else { continue }
@@ -777,7 +865,7 @@ public final class MatrixClient: IMService {
 		for (n, item) in items.enumerated() {
 			guard case let .msgLike(content) = item.content else { continue }
 			let outgoing = item.isOwn, sender = item.sender
-			let senderName = outgoing ? displayName : name(of: sender)
+			let senderName = outgoing ? displayName : senderName(item)
 			let date = Date(timeIntervalSince1970: Double(item.timestamp) / 1000)
 			switch content.kind {
 			case .unableToDecrypt:
@@ -849,7 +937,14 @@ public final class MatrixClient: IMService {
 	// MARK: - Contact management
 
 	public func addContact(_ raw: String) async throws {
-		let user = raw.trimmingCharacters(in: .whitespaces).lowercased()
+		let address = raw.trimmingCharacters(in: .whitespaces)
+		// A room's address: join it (IDs are case-sensitive, so as typed).
+		if MatrixID.isRoomAddress(address) {
+			guard let client else { throw MSNPError.disconnected }
+			let room = try await client.joinRoomByIdOrAlias(roomIdOrAlias: address, serverNames: MatrixID.server(of: address).map { [$0] } ?? [])
+			return await refreshRooms([room.id()], emit: true)
+		}
+		let user = address.lowercased()
 		guard MatrixID.isUserID(user) else { throw MatrixError.badUserID(raw) }
 		guard client != nil else { throw MSNPError.disconnected }
 		guard user != email else { return }
@@ -868,24 +963,32 @@ public final class MatrixClient: IMService {
 	}
 
 	/// Accepting joins the DM room; declining leaves it and blocks the inviter, as WLM's "Block" did.
+	/// An invitation to a group (`user` is its room) is only joined or declined.
 	public func respondToAdd(_ user: String, allow: Bool, addToList: Bool) async throws {
 		guard client != nil else { throw MSNPError.disconnected }
 		guard let id = invites[user], let room = rooms[id] else {
 			if allow, addToList { try await addContact(user) } else if !allow { try await block(user) }
 			return
 		}
+		let isGroup = id == user
 		if allow {
 			try await room.join()
-			await refreshRooms([id], emit: false)
+			await refreshRooms([id], emit: isGroup)
+			if isGroup { return }
 			if addToList { try await setDirect(id, user, true) } else { rebuildContacts(emit: true) }
 		} else {
 			try? await room.leave()
-			try await block(user)
+			if isGroup { await refreshRooms([id], emit: true) } else { try await block(user) }
 		}
 	}
 
 	/// Takes them off m.direct; the room stays, so they can still message you (as in WLM).
+	/// A group is left.
 	public func removeContact(_ user: String) async throws {
+		if isGroup(user), let room = rooms[user] {
+			try await room.leave()
+			return await refreshRooms([user], emit: true)
+		}
 		var next = try await serverDirect()
 		guard next[user] != nil else { return }
 		next[user] = nil
@@ -903,6 +1006,7 @@ public final class MatrixClient: IMService {
 	/// m.ignored_user_list from the server, changed and written back: the SDK's
 	/// own (un)ignoreUser go by its cached copy, which lags behind quick changes.
 	private func setIgnored(_ user: String, _ ignore: Bool) async throws {
+		guard MatrixID.isUserID(user) else { throw MatrixError.badUserID(user) }
 		guard let client, let api = Self.api(client) else { throw MSNPError.disconnected }
 		let path = "/user/\(MatrixAPI.segment(email))/account_data/m.ignored_user_list"
 		var users: [String: JSON]
@@ -1016,12 +1120,70 @@ public final class MatrixClient: IMService {
 
 	public func closeConversation(with peer: String) {
 		if let id = existingRoom(with: peer), let room = rooms[id] { stopTyping(in: room) }
+		if liveGroups.remove(peer) != nil { watchConversations() }
+	}
+
+	// MARK: - Group conversations
+
+	public var supportsGroupConversations: Bool { true }
+
+	/// Whether `id` is a group room we're in.
+	private func isGroup(_ id: String) -> Bool {
+		roomPeer[id] == id
+	}
+
+	/// Into a group: an invitation to its room. Into a one-to-one conversation:
+	/// a new room for the three of you (as Element does, and as an MSN group
+	/// conversation was a session of its own), so the newcomer doesn't get to
+	/// read what the two of you said. It's named after its people, so that
+	/// other clients take the invitation for a group and not a DM.
+	@discardableResult
+	public func invite(_ user: String, into peer: String) async throws -> String {
+		guard MatrixID.isUserID(user) else { throw MatrixError.badUserID(user) }
+		if isGroup(peer), let room = rooms[peer] {
+			try await room.inviteUserById(userId: user)
+			return peer
+		}
+		guard MatrixID.isUserID(peer) else { throw MatrixError.badUserID(peer) }
+		return try await makeGroup(named: [displayName, name(of: peer), name(of: user)].joined(separator: ", "), inviting: [peer, user])
+	}
+
+	public var supportsNamedGroups: Bool { true }
+
+	public func createGroup(named name: String) async throws -> String {
+		try await makeGroup(named: name, inviting: [])
+	}
+
+	/// A private, encrypted room that anyone in it can invite into.
+	private func makeGroup(named name: String, inviting users: [String]) async throws -> String {
+		guard let client else { throw MSNPError.disconnected }
+		let id = try await client.createRoom(request: CreateRoomParameters(
+			name: name, isEncrypted: true, visibility: .private, preset: .privateChat, invite: users))
+		_ = try await client.awaitRoomRemoteEcho(roomId: id)
+		await refreshRooms([id], emit: true)
+		return id
+	}
+
+	/// The new name reaches the list with the next sync.
+	public func renameGroup(_ id: String, to name: String) async throws {
+		guard isGroup(id), let room = rooms[id] else { throw MSNPError.disconnected }
+		try await room.setName(name: name)
+	}
+
+	/// The windows ask when they open a conversation: from then until
+	/// `closeConversation` the group is followed, and they are told who joins
+	/// and leaves it.
+	public func participants(inConversationWith peer: String) -> [String] {
+		guard isGroup(peer) else { return [peer] }
+		if liveGroups.insert(peer).inserted { watchConversations() }
+		return (members[peer] ?? []).subtracting([email]).sorted()
 	}
 
 	/// The room to talk to `user` in, of the one-to-one rooms with them we're in
 	/// (m.direct's newest first): an encrypted one they're in too, else any
-	/// they're in, else the newest listed.
+	/// they're in, else the newest listed. A group is its own room.
 	private func existingRoom(with user: String) -> String? {
+		if isGroup(user) { return user }
 		let listed = (direct[user] ?? []).reversed().filter { roomInfos[$0]?.membership == .joined && isOneToOne($0, with: user) }
 		let others = roomPeer.filter { $0.value == user && !listed.contains($0.key) }.map(\.key)
 		let shared = (listed + others).filter { members[$0]?.contains(user) == true }
@@ -1042,6 +1204,7 @@ public final class MatrixClient: IMService {
 	}
 
 	private func conversationRoom(with peer: String) async throws -> Room {
+		if isGroup(peer), let room = rooms[peer] { return room }
 		guard MatrixID.isUserID(peer) else { throw MatrixError.badUserID(peer) }
 		let id: String
 		if let existing = existingRoom(with: peer) { id = existing } else { id = try await createDirectRoom(with: peer) }

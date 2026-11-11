@@ -27,6 +27,8 @@ final class AppModel: ObservableObject {
 	@Published private(set) var myMessage = ""
 	@Published private(set) var myStatus: Presence = .offline
 	@Published private(set) var contacts: [Contact] = []
+	/// Group conversations that stay (Matrix rooms), kept apart from the people.
+	@Published private(set) var groupChats: [Contact] = []
 	@Published private(set) var groups: [ABGroup] = []
 	@Published var addRequests: [AddRequest] = []
 	@Published var alert: String?
@@ -137,6 +139,7 @@ final class AppModel: ObservableObject {
 		windows.closeAll()
 		conversations.removeAll()
 		contacts = []
+		groupChats = []
 		addRequests = []
 		phase = .signedOut
 		settings.signInAutomatically = false
@@ -233,7 +236,8 @@ final class AppModel: ObservableObject {
 
 	func addContact(_ email: String) {
 		guard let client else { return }
-		let email = email.trimmingCharacters(in: .whitespaces).lowercased()
+		// As typed: the services lowercase people's addresses themselves, and a Matrix room's ID is case-sensitive.
+		let email = email.trimmingCharacters(in: .whitespaces)
 		if let problem = profile.problem(withContact: email) {
 			alert = problem
 			return
@@ -320,6 +324,9 @@ final class AppModel: ObservableObject {
 
 	func openConversation(_ peer: String, activate: Bool = true) {
 		let convo = conversation(with: peer)
+		// Who is in it now. Asking also tells the service the conversation is
+		// open (a Matrix group is followed from then until it's closed).
+		if let now = client?.participants(inConversationWith: peer), now != convo.participants { convo.participants = now }
 		windows.show(convo, activate: activate)
 		client?.requestDisplayPicture(of: peer)
 		if let c = contact(peer), !c.status.isOnline { tellOffline(convo) }
@@ -337,11 +344,30 @@ final class AppModel: ObservableObject {
 	func invite(_ email: String, into peer: String) {
 		guard let client else { return }
 		Task {
-			do { try await client.invite(email, into: peer) } catch {
+			do {
+				// Matrix makes a group of its own for the three of you: carry on there.
+				let group = try await client.invite(email, into: peer)
+				if group != peer { self.openConversation(group) }
+			} catch {
 				self.conversation(with: peer).append(.notice(Skin.shared.string(2074, "Your invitation to join this conversation could not be delivered to %1.")
 					.replacingOccurrences(of: "%1", with: self.name(of: email))))
 			}
 		}
+	}
+
+	/// Whether the current service has groups that can be started and renamed.
+	var supportsNamedGroups: Bool { client?.supportsNamedGroups ?? false }
+
+	func startGroup(named name: String) {
+		guard let client else { return }
+		Task {
+			do { self.openConversation(try await client.createGroup(named: name)) } catch { self.alert = error.localizedDescription }
+		}
+	}
+
+	func renameGroup(_ id: String, to name: String) {
+		guard let client else { return }
+		Task { do { try await client.renameGroup(id, to: name) } catch { self.alert = error.localizedDescription } }
 	}
 
 	// MARK: - Files
@@ -490,9 +516,11 @@ final class AppModel: ObservableObject {
 
 	private func refreshContacts() {
 		guard let client else { return }
-		contacts = client.contacts.values
+		let listed = client.contacts.values
 			.filter { $0.isForward }
 			.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+		contacts = listed.filter { !$0.isGroup }
+		groupChats = listed.filter(\.isGroup)
 		groups = client.groups
 	}
 
@@ -553,6 +581,7 @@ final class AppModel: ObservableObject {
 			windows.closeAll()
 			conversations.removeAll()
 			contacts = []
+			groupChats = []
 			client = nil
 			phase = .signedOut
 			signInError = reason

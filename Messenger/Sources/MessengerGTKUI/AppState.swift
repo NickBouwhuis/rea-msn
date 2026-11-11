@@ -92,6 +92,8 @@ final class AppState {
 	var signInError: String?
 	private(set) var client: (any IMService)?
 	private(set) var contacts: [Contact] = []
+	/// Group conversations that stay (Matrix rooms), kept apart from the people.
+	private(set) var groupChats: [Contact] = []
 	private(set) var groups: [ABGroup] = []
 	private(set) var myEmail = ""
 	private(set) var myName = ""
@@ -174,6 +176,7 @@ final class AppState {
 		for w in conversations.values { w.close() }
 		conversations.removeAll()
 		contacts = []
+		groupChats = []
 		phase = .signedOut
 		notify(onPhase)
 	}
@@ -285,12 +288,25 @@ final class AppState {
 	func invite(_ email: String, into peer: String) {
 		guard let client else { return }
 		Task {
-			do { try await client.invite(email, into: peer) } catch {
+			do {
+				// Matrix makes a group of its own for the three of you: carry on there.
+				let group = try await client.invite(email, into: peer)
+				if group != peer { self.openConversation(group) }
+			} catch {
 				self.conversations[peer]?.post(.notice(Skin.shared.string(2074, "Your invitation to join this conversation could not be delivered to %1.")
 					.replacingOccurrences(of: "%1", with: self.name(of: email))))
 			}
 		}
 	}
+
+	func startGroup(named name: String) {
+		guard let client else { return }
+		Task {
+			do { self.openConversation(try await client.createGroup(named: name)) } catch { self.alert(error.localizedDescription) }
+		}
+	}
+
+	func renameGroup(_ id: String, to name: String) { run { try await $0.renameGroup(id, to: name) } }
 
 	// MARK: Files
 
@@ -351,8 +367,10 @@ final class AppState {
 
 	private func refresh() {
 		guard let client else { return }
-		contacts = client.contacts.values.filter(\.isForward)
+		let listed = client.contacts.values.filter(\.isForward)
 			.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+		contacts = listed.filter { !$0.isGroup }
+		groupChats = listed.filter(\.isGroup)
 		groups = client.groups
 		myName = client.displayName
 		myMessage = client.personalMessage
@@ -406,6 +424,7 @@ final class AppState {
 			for w in conversations.values { w.close() }
 			conversations.removeAll()
 			contacts = []
+			groupChats = []
 			client = nil
 			phase = .signedOut
 			signInError = reason

@@ -125,6 +125,21 @@ enum Dialog {
 		present(w, modalTo: parent)
 	}
 
+	static func confirm(_ message: String, ok: String, parent: Ptr?, _ done: @escaping () -> Void) {
+		let (w, _) = Chrome.window(app: nil, width: 340, height: 150)
+		let body = vbox(10)
+		margins(body, top: 12, start: 16, bottom: 12, end: 16)
+		append(body, label(message, css: ["wlm-label"], wrap: true))
+		append(body, spacer(v: true))
+		let row = hbox(6)
+		append(row, spacer())
+		append(row, button(label: "Cancel", css: ["wlm-push"]) { gtk_window_destroy(c(w)) })
+		append(row, button(label: ok, css: ["wlm-push", "default"]) { done(); gtk_window_destroy(c(w)) })
+		append(body, row)
+		gtk_window_set_child(c(w), c(body))
+		present(w, modalTo: parent)
+	}
+
 	static func prompt(title: String, message: String, placeholder: String, text initial: String = "", ok: String, parent: Ptr?, _ done: @escaping (String) -> Void) {
 		let (w, _) = Chrome.window(app: nil, width: 340, height: 170)
 		let body = vbox(6)

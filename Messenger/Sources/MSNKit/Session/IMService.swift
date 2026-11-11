@@ -53,11 +53,23 @@ public protocol IMService: AnyObject {
 	/// Where to cache contacts' pictures, where the service needs one (the app sets it).
 	var displayPictureDirectory: URL? { get set }
 
-	// Group conversations.
+	// Group conversations. On MSNP a conversation grows into one when someone
+	// is invited. A service with groups that stay (Matrix rooms) also lists
+	// them in `contacts` with `isGroup` set, keyed like a peer by their ID:
+	// an invitation to one arrives as `addedBy(email: its ID, displayName: the
+	// inviter's name)` and is answered with `respondToAdd`, and
+	// `removeContact` leaves it, and `addContact` with a group's address joins it.
 	var supportsGroupConversations: Bool { get }
-	func invite(_ email: String, into peer: String) async throws
+	/// Returns the conversation they were invited into: `peer`, or the ID of
+	/// the group that was made for it.
+	@discardableResult func invite(_ email: String, into peer: String) async throws -> String
 	/// Everyone in the conversation with `peer` apart from us.
 	func participants(inConversationWith peer: String) -> [String]
+	/// Whether groups that stay can be started and renamed here (the windows then offer it).
+	var supportsNamedGroups: Bool { get }
+	/// Starts a group conversation called `name`; returns its ID.
+	func createGroup(named name: String) async throws -> String
+	func renameGroup(_ id: String, to name: String) async throws
 
 	// File transfer (MSNP P2P), followed through ConversationEvent.file.
 	var supportsFileTransfer: Bool { get }
@@ -134,8 +146,13 @@ public extension IMService {
 	}
 
 	var supportsGroupConversations: Bool { false }
-	func invite(_ email: String, into peer: String) async throws { throw IMServiceError.unsupported("Inviting people into a conversation") }
+	@discardableResult func invite(_ email: String, into peer: String) async throws -> String {
+		throw IMServiceError.unsupported("Inviting people into a conversation")
+	}
 	func participants(inConversationWith peer: String) -> [String] { [peer] }
+	var supportsNamedGroups: Bool { false }
+	func createGroup(named name: String) async throws -> String { throw IMServiceError.unsupported("Starting a group conversation") }
+	func renameGroup(_ id: String, to name: String) async throws { throw IMServiceError.unsupported("Renaming a group conversation") }
 
 	var supportsFileTransfer: Bool { false }
 	@discardableResult func sendFile(_ url: URL, to peer: String) throws -> FileTransfer { throw IMServiceError.unsupported("Sending files") }

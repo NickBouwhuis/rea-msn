@@ -306,22 +306,22 @@ wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre
 
 	<section id="features" aria-labelledby="features-h">
 		<h2 id="features-h">What works</h2>
-		<p class="prose">One-to-one chats with anyone on Matrix, encrypted, in Messenger's windows.</p>
+		<p class="prose">One-to-one and group chats with anyone on Matrix, encrypted, in Messenger's windows.</p>
 		<div class="list" role="list">
-			<div class="group">Works (11)</div>
+			<div class="group">Works (12)</div>
 			<div class="buddy" role="listitem"><b>Sign in</b><span>with a password, or through your homeserver's own sign-in page in the browser</span></div>
 			<div class="buddy" role="listitem"><b>End-to-end encryption</b><span>your existing Element chats, and new chats start encrypted</span></div>
 			<div class="buddy" role="listitem"><b>Verify this session</b><span>emoji with another session, or your recovery key</span></div>
 			<div class="buddy" role="listitem"><b>Contacts</b><span>your direct chats; adding someone invites them, and their invites show as "has added you"</span></div>
 			<div class="buddy" role="listitem"><b>Status and personal message</b><span>your Matrix presence and status message</span></div>
 			<div class="buddy" role="listitem"><b>Conversations</b><span>fonts and colours, "is typing a message", nudges that shake the window</span></div>
+			<div class="buddy" role="listitem"><b>Group conversations</b><span>your rooms, in a group of their own on the contact list; start, rename and join them, and Invite adds people</span></div>
 			<div class="buddy" role="listitem"><b>Pictures</b><span>paste or drop one into the message box; received ones show in the conversation</span></div>
 			<div class="buddy" role="listitem"><b>Message history</b><span>the last messages before you signed in, decrypted with keys from your other sessions</span></div>
 			<div class="buddy" role="listitem"><b>Display pictures</b><span>your Matrix avatar and your contacts'</span></div>
 			<div class="buddy" role="listitem"><b>Block</b><span>Matrix's ignore list, shared with your other apps</span></div>
 			<div class="buddy" role="listitem"><b>Remember me</b><span>stays the same, verified session between launches</span></div>
-			<div class="group">Not yet (4)</div>
-			<div class="buddy off" role="listitem"><b>Group rooms</b><span>only one-to-one chats appear for now</span></div>
+			<div class="group">Not yet (3)</div>
 			<div class="buddy off" role="listitem"><b>Encryption on Ubuntu</b><span>the Linux app speaks plain Matrix until matrix-rust-sdk is built for it</span></div>
 			<div class="buddy off" role="listitem"><b>Other files</b><span>pictures only</span></div>
 			<div class="buddy off" role="listitem"><b>Voice and video</b></div>
@@ -336,6 +336,8 @@ wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre
 			<dd>The people you have direct chats with (<code>m.direct</code>).</dd>
 			<dt>"Has added you"</dt>
 			<dd>An invite to a direct chat. Declining leaves it and blocks the sender, as Messenger did.</dd>
+			<dt>Group conversations</dt>
+			<dd>Every other room with a name or several people in it. Inviting a third person into a one-to-one chat starts a new room, so they can't read what the two of you said. "Add a contact" with a room's address joins it, and a room you muted in another app stays quiet until you open it.</dd>
 			<dt>Status</dt>
 			<dd>Matrix presence: Online, Away for the away-type statuses, Offline for Appear Offline. The personal message is the presence status message.</dd>
 			<dt>Fonts and colours</dt>

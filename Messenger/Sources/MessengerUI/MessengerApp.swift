@@ -114,6 +114,9 @@ struct MessengerCommands: Commands {
 			Button("Add a Contact...") { NotificationCenter.default.post(name: .addContactRequested, object: nil) }
 				.keyboardShortcut("n", modifiers: [.command, .shift])
 				.disabled(app.phase != .signedIn)
+			if app.supportsNamedGroups {
+				Button("Start a Group Conversation...") { NotificationCenter.default.post(name: .newGroupRequested, object: nil) }
+			}
 			Divider()
 			Toggle("Sort Contacts by Groups", isOn: $app.settings.sortByGroups)
 			Toggle("Show Offline Contacts", isOn: $app.settings.showOfflineContacts)

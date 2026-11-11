@@ -16,6 +16,18 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertFalse(MatrixID.isUserID("@al ice:matrix.org"))
 	}
 
+	func testRoomAddresses() {
+		XCTAssertTrue(MatrixID.isRoomAddress("#room:matrix.org"))
+		XCTAssertTrue(MatrixID.isRoomAddress("!AbCdEf:matrix.org"))
+		XCTAssertTrue(MatrixID.isRoomAddress("!31hneApxJ_1o-63DmFrpeqnkFfWppnzWso1JvH3ogLM"))  // room version 12: no server
+		XCTAssertFalse(MatrixID.isRoomAddress("#room"))
+		XCTAssertFalse(MatrixID.isRoomAddress("@alice:matrix.org"))
+		XCTAssertFalse(MatrixID.isRoomAddress("#ro om:matrix.org"))
+		XCTAssertFalse(MatrixID.isRoomAddress("!"))
+		XCTAssertEqual(MatrixID.server(of: "#room:localhost:8008"), "localhost:8008")
+		XCTAssertNil(MatrixID.server(of: "!31hneApxJ_1o-63DmFrpeqnkFfWppnzWso1JvH3ogLM"))
+	}
+
 	func testPathSegmentsAreEscaped() {
 		XCTAssertEqual(MatrixAPI.segment("@alice:localhost"), "%40alice%3Alocalhost")
 		XCTAssertEqual(MatrixAPI.segment("!AbC/d+e:server"), "%21AbC%2Fd%2Be%3Aserver")
@@ -109,7 +121,7 @@ final class MatrixKitTests: XCTestCase {
 		let filter = MatrixClient.filter(timelineLimit: 1)
 		XCTAssertEqual(filter["room"]["timeline"]["limit"].int, 1)
 		XCTAssertEqual(filter["room"]["ephemeral"]["types"], ["m.typing"])
-		XCTAssertEqual(filter["account_data"]["types"], ["m.direct", "m.ignored_user_list"])
+		XCTAssertEqual(filter["account_data"]["types"], ["m.direct", "m.ignored_user_list", "m.push_rules"])
 	}
 	#endif
 

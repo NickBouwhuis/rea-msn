@@ -44,6 +44,17 @@ public enum MatrixID {
 		return String(server)
 	}
 
+	/// A room's address (#alias:server) or ID (!id…), which "Add a contact" joins.
+	public static func isRoomAddress(_ s: String) -> Bool {
+		guard s.count > 1, !s.contains(where: \.isWhitespace) else { return false }
+		return s.hasPrefix("!") || (s.hasPrefix("#") && s.contains(":"))
+	}
+
+	/// The server an address names (what follows its first colon), to join a room through.
+	public static func server(of address: String) -> String? {
+		address.firstIndex(of: ":").map { String(address[address.index(after: $0)...]) }.flatMap { $0.isEmpty ? nil : $0 }
+	}
+
 	public static func localpart(of userID: String) -> String {
 		guard userID.hasPrefix("@"), let colon = userID.firstIndex(of: ":") else { return userID }
 		return String(userID[userID.index(after: userID.startIndex)..<colon])

@@ -674,9 +674,11 @@ public final class MessengerClient {
 
 	/// Invites `email` into the conversation with `peer`, making it a group
 	/// conversation (WLM's "Invite a contact to this conversation").
-	public func invite(_ email: String, into peer: String) async throws {
+	@discardableResult
+	public func invite(_ email: String, into peer: String) async throws -> String {
 		let sb = try await switchboard(for: peer)
 		try await sb.invite(email.lowercased())
+		return peer
 	}
 
 	/// Everyone in the conversation with `peer` apart from us.

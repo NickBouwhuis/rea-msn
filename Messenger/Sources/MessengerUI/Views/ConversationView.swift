@@ -17,13 +17,21 @@ struct ConversationView: View {
 
 	private var contact: Contact? { app.contacts.first { $0.email == convo.peer } ?? app.contact(convo.peer) }
 	private var peerName: String { app.name(of: convo.peer) }
-	/// "Alice" or, in a group conversation, "Alice, Carol".
+	/// A group that stays (a Matrix room), which has a name of its own.
+	private var isGroup: Bool { contact?.isGroup == true }
+	private var participantNames: String { convo.participants.map { app.name(of: $0) }.joined(separator: ", ") }
+	/// "Alice" or, in a group conversation, "Alice, Carol" (or the group's name).
 	private var title: String {
-		convo.participants.count > 1 ? convo.participants.map { app.name(of: $0) }.joined(separator: ", ") : peerName
+		convo.participants.count > 1 && !isGroup ? participantNames : peerName
+	}
+	/// The contact's address, or who is in a group.
+	private var subtitle: String? {
+		if isGroup { return participantNames }
+		return convo.participants.count > 1 ? nil : "<\(convo.peer)>"
 	}
 
 	var body: some View {
-		WLMChrome(title: title, subtitle: convo.participants.count > 1 ? nil : "<\(convo.peer)>") {
+		WLMChrome(title: title, subtitle: subtitle) {
 			VStack(spacing: 0) {
 				activityToolbar
 				HStack(alignment: .top, spacing: 8) {
@@ -66,7 +74,7 @@ struct ConversationView: View {
 			ToolbarIconButton(id: 1443, symbol: "gamecontroller", help: s.string(61346, "Games")) {}
 			Spacer(minLength: 0)
 			ToolbarIconButton(id: 326, symbol: "nosign", help: s.string(426, "Block")) {
-				if let c = contact { app.setBlocked(c.email, !c.isBlocked) }
+				if let c = contact, !c.isGroup { app.setBlocked(c.email, !c.isBlocked) }
 			}
 		}
 		.padding(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
@@ -166,7 +174,7 @@ struct ConversationView: View {
 	/// youusertile (top) and meusertile (bottom), 96pt with the tile border.
 	private var pictures: some View {
 		VStack {
-			if convo.participants.count <= 1 {
+			if convo.participants.count <= 1 || isGroup {
 				UserTile(seed: convo.peer, picture: app.displayPicture(of: convo.peer))
 			}
 			Spacer()

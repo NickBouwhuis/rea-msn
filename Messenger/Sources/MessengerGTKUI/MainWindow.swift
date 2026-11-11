@@ -39,6 +39,8 @@ final class MainWindow {
 	private var collapsed: Set<String> = []
 	private var selected: String?
 	private var selectedRow: Ptr?
+	/// "Start a group conversation...", shown where the service has groups to start.
+	private var newGroupItem: Ptr?
 
 	init(app: Ptr) {
 		(window, _) = Chrome.window(app: app, width: 310, height: 700)
@@ -348,7 +350,20 @@ final class MainWindow {
 		append(searchRow, button(picture(skin.image(R.addContact)), css: ["wlm-flat"], tooltip: skin.string(49110, "Add a contact")) { [weak self] in
 			self?.promptAddContact()
 		})
-		append(searchRow, button(picture(skin.image(R.viewMenu)), css: ["wlm-flat"]) {})
+		// The menu button: what the Contacts menu holds on macOS.
+		let menu = vbox(0)
+		let (contactsButton, contactsPopover) = menuButton(picture(skin.image(R.viewMenu)), content: menu, css: ["wlm-flat"])
+		append(menu, menuItem(skin.string(49110, "Add a contact") + "...") { [weak self] in
+			popdown(contactsPopover)
+			self?.promptAddContact()
+		})
+		let newGroup = menuItem("Start a group conversation...") { [weak self] in
+			popdown(contactsPopover)
+			self?.promptGroupName(for: nil)
+		}
+		newGroupItem = newGroup
+		append(menu, newGroup)
+		append(searchRow, contactsButton)
 		append(book, searchRow)
 		list = vbox(0)
 		margins(list, top: 3, bottom: 3)
@@ -375,6 +390,7 @@ final class MainWindow {
 
 	private func rebuildList() {
 		guard state.phase == .signedIn else { return }
+		if let newGroupItem { visible(newGroupItem, state.client?.supportsNamedGroups == true) }
 		selectedRow = nil
 		removeAllChildren(list)
 		let q = text(of: search).lowercased()
@@ -391,6 +407,9 @@ final class MainWindow {
 		let known = Set(state.groups.map(\.groupID))
 		sections.append(("other", skin.string(45469, "Other Contacts"),
 		                 visibleContacts.filter { Set($0.groupIDs).isDisjoint(with: known) }.sorted(by: order)))
+		// Group conversations that stay (Matrix rooms) come first, as WLM's later versions listed groups.
+		let chats = state.groupChats.filter { q.isEmpty || $0.displayName.lowercased().contains(q) }
+		if !chats.isEmpty { sections.insert(("groupchats", "Group conversations", chats), at: 0) }
 		for s in sections {
 			let online = s.members.filter { $0.status.isOnline }.count
 			let isCollapsed = collapsed.contains(s.id)
@@ -467,9 +486,22 @@ final class MainWindow {
 			append(menu, menuItem(title) { popdown(pop); action() })
 		}
 		item("Send an instant message") { AppState.shared.openConversation(contact.email) }
-		item("Send a nudge") { AppState.shared.nudge(contact.email) }
-		item(contact.isBlocked ? "Unblock contact" : "Block contact") { AppState.shared.setBlocked(contact.email, !contact.isBlocked) }
-		item("Delete contact") { AppState.shared.removeContact(contact.email) }
+		if contact.isGroup {
+			if state.client?.supportsNamedGroups == true {
+				item("Rename...") { [weak self] in self?.promptGroupName(for: contact) }
+			}
+			item("Leave group conversation...") { [weak self] in
+				// Leaving a private room can only be undone by a new invitation.
+				Dialog.confirm("Are you sure you want to leave the group conversation \(contact.displayName)?", ok: "Leave",
+				               parent: self?.window) {
+					AppState.shared.removeContact(contact.email)
+				}
+			}
+		} else {
+			item("Send a nudge") { AppState.shared.nudge(contact.email) }
+			item(contact.isBlocked ? "Unblock contact" : "Block contact") { AppState.shared.setBlocked(contact.email, !contact.isBlocked) }
+			item("Delete contact") { AppState.shared.removeContact(contact.email) }
+		}
 		gtk_popover_set_child(c(pop), c(menu))
 		gtk_widget_set_parent(c(pop), c(row))
 		on(pop, "closed") { gtk_widget_unparent(c(pop)) }
@@ -530,6 +562,17 @@ final class MainWindow {
 		}
 	}
 
+	/// Names a new group conversation, or renames `group`.
+	private func promptGroupName(for group: Contact?) {
+		Dialog.prompt(title: group == nil ? "Start a group conversation" : "Rename group conversation",
+		              message: group == nil ? "Name (once it's open, use Invite to add people):" : "Name:",
+		              placeholder: "", text: group?.displayName ?? "", ok: group == nil ? "Start" : "Rename", parent: window) { name in
+			let n = name.trimmingCharacters(in: .whitespaces)
+			guard !n.isEmpty else { return }
+			if let group { AppState.shared.renameGroup(group.email, to: n) } else { AppState.shared.startGroup(named: n) }
+		}
+	}
+
 	private func promptAddContact() {
 		Dialog.prompt(title: skin.string(45278, "Add a Contact"), message: "Instant messaging address:",
 		              placeholder: state.profile.contactExample, ok: "Add contact", parent: window) { [weak self] email in
@@ -547,14 +590,18 @@ final class MainWindow {
 		let (w, _) = Chrome.window(app: nil, width: 420, height: 230)
 		let body = vbox(8)
 		margins(body, top: 12, start: 16, bottom: 12, end: 16)
+		// An invitation to a group conversation: then req.email is the group, req.name who invites.
+		let group = state.contact(req.email).flatMap { $0.isGroup ? $0 : nil }
 		append(body, hbox(10, [userTile(size: 48, picture: state.displayPicture(of: req.email)), vbox(2, [
-			label("\(req.name) (\(req.email))", css: ["wlm-bold"]),
-			label("has added you to his or her contact list.", css: ["wlm-label"]),
+			label(group == nil ? "\(req.name) (\(req.email))" : req.name, css: ["wlm-bold"]),
+			label(group.map { "has invited you to the group conversation \($0.displayName)." } ?? "has added you to his or her contact list.",
+			      css: ["wlm-label"]),
 		])]))
-		let allow = checkbox("Allow this person to see when you are online and contact you", active: true)
+		let allow = checkbox(group == nil ? "Allow this person to see when you are online and contact you" : "Join this group conversation",
+		                     active: true)
 		let add = checkbox("Add this person to my contact list", active: true)
 		append(body, allow)
-		append(body, add)
+		if group == nil { append(body, add) }
 		append(body, spacer(v: true))
 		let ok = button(label: "OK", css: ["wlm-push", "default"]) { [weak self] in
 			AppState.shared.respond(req.email, allow: isActive(allow), add: isActive(add))

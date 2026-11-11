@@ -10,6 +10,8 @@ struct ContactListView: View {
 	@State private var collapsed: Set<String> = []
 	@State private var selection: String?
 	@State private var showAddContact = false
+	@State private var showNewGroup = false
+	@State private var renaming: Contact?
 	@State private var pendingDelete: Contact?
 	@FocusState private var searchFocused: Bool
 
@@ -23,18 +25,27 @@ struct ContactListView: View {
 			}
 		}
 		.sheet(isPresented: $showAddContact) { AddContactSheet() }
+		.sheet(isPresented: $showNewGroup) { GroupNameSheet(group: nil) }
+		.sheet(item: $renaming) { GroupNameSheet(group: $0) }
 		.sheet(item: Binding(get: { app.addRequests.first }, set: { _ in })) { req in
 			AddedYouSheet(request: req)
 		}
-		.confirmationDialog("Delete contact", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+		.confirmationDialog(pendingDelete?.isGroup == true ? "Leave group conversation" : "Delete contact",
+		                    isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
 		                    presenting: pendingDelete) { c in
-			Button("Delete contact") { app.removeContact(c.email, block: false) }
-			Button("Delete and block") { app.removeContact(c.email, block: true) }
+			if c.isGroup {
+				Button("Leave group conversation") { app.removeContact(c.email, block: false) }
+			} else {
+				Button("Delete contact") { app.removeContact(c.email, block: false) }
+				Button("Delete and block") { app.removeContact(c.email, block: true) }
+			}
 			Button("Cancel", role: .cancel) {}
 		} message: { c in
-			Text("Are you sure you want to delete \(c.displayName) (\(c.email)) from your contact list?")
+			Text(c.isGroup ? "Are you sure you want to leave the group conversation \(c.displayName)?"
+				: "Are you sure you want to delete \(c.displayName) (\(c.email)) from your contact list?")
 		}
 		.onReceive(NotificationCenter.default.publisher(for: .addContactRequested)) { _ in showAddContact = true }
+		.onReceive(NotificationCenter.default.publisher(for: .newGroupRequested)) { _ in showNewGroup = true }
 	}
 
 	// MARK: AddressBook (UIFILE 1001)
@@ -121,8 +132,12 @@ struct ContactListView: View {
 			return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
 		}
 		func online(_ cs: [Contact]) -> Int { cs.filter { $0.status.isOnline }.count }
+		// Group conversations that stay (Matrix rooms) come first, as WLM's later versions listed groups.
+		let chats = app.groupChats.filter { q.isEmpty || $0.displayName.lowercased().contains(q) }
+		let groupChats = chats.isEmpty ? [] : [Section(id: "groupchats", title: "Group conversations", contacts: chats,
+		                                               onlineCount: chats.count, showsOnline: false)]
 		if app.settings.sortByGroups {
-			var out: [Section] = []
+			var out = groupChats
 			for g in app.groups.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
 				let members = visible.filter { $0.groupIDs.contains(g.groupID) }.sorted(by: order)
 				out.append(Section(id: g.groupID, title: g.name, contacts: members, onlineCount: online(members), showsOnline: true))
@@ -134,7 +149,7 @@ struct ContactListView: View {
 		}
 		let on = visible.filter { $0.status.isOnline }.sorted(by: order)
 		let off = visible.filter { !$0.status.isOnline }.sorted(by: order)
-		var out = [Section(id: "online", title: Skin.shared.string(45207, "Online"), contacts: on, onlineCount: on.count, showsOnline: false)]
+		var out = groupChats + [Section(id: "online", title: Skin.shared.string(45207, "Online"), contacts: on, onlineCount: on.count, showsOnline: false)]
 		if app.settings.showOfflineContacts {
 			out.append(Section(id: "offline", title: Skin.shared.string(45208, "Offline"), contacts: off, onlineCount: 0, showsOnline: false))
 		}
@@ -178,19 +193,25 @@ struct ContactListView: View {
 	@ViewBuilder
 	private func contextMenu(_ c: Contact) -> some View {
 		Button("Send an instant message") { app.openConversation(c.email) }
-		Button("Send a nudge") { app.openConversation(c.email); app.nudge(c.email) }.disabled(!c.status.isOnline)
-		Divider()
-		Button("Copy e-mail address") {
-			NSPasteboard.general.clearContents()
-			NSPasteboard.general.setString(c.email, forType: .string)
-		}
-		Divider()
-		if c.isBlocked {
-			Button("Unblock contact") { app.setBlocked(c.email, false) }
+		if c.isGroup {
+			if app.supportsNamedGroups { Button("Rename...") { renaming = c } }
+			Divider()
+			Button("Leave group conversation...") { pendingDelete = c }
 		} else {
-			Button("Block contact") { app.setBlocked(c.email, true) }
+			Button("Send a nudge") { app.openConversation(c.email); app.nudge(c.email) }.disabled(!c.status.isOnline)
+			Divider()
+			Button("Copy e-mail address") {
+				NSPasteboard.general.clearContents()
+				NSPasteboard.general.setString(c.email, forType: .string)
+			}
+			Divider()
+			if c.isBlocked {
+				Button("Unblock contact") { app.setBlocked(c.email, false) }
+			} else {
+				Button("Block contact") { app.setBlocked(c.email, true) }
+			}
+			Button("Delete contact...") { pendingDelete = c }
 		}
-		Button("Delete contact...") { pendingDelete = c }
 	}
 }
 
@@ -339,7 +360,7 @@ struct AddContactSheet: View {
 		VStack(alignment: .leading, spacing: 10) {
 			Text("Add a Contact").font(.system(size: 15, weight: .semibold)).foregroundStyle(WLM.ink)
 			Text("Instant messaging address:").font(.system(size: 11)).foregroundStyle(WLM.ink)
-			TextField("Example: someone@escargot.chat", text: $email)
+			TextField(app.profile.contactExample, text: $email)
 				.textFieldStyle(.roundedBorder)
 				.onSubmit(add)
 			Text("Your contact will be asked to approve your request before you can see their status.")
@@ -348,7 +369,8 @@ struct AddContactSheet: View {
 			HStack {
 				Spacer()
 				Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-				Button("Add contact", action: add).keyboardShortcut(.defaultAction).disabled(!email.contains("@"))
+				Button("Add contact", action: add).keyboardShortcut(.defaultAction)
+					.disabled(app.profile.problem(withContact: email.trimmingCharacters(in: .whitespaces)) != nil)
 			}
 		}
 		.padding(18)
@@ -361,33 +383,77 @@ struct AddContactSheet: View {
 	}
 }
 
-/// "X has added you to their contact list" (WLM 8.1 wording).
+/// Names a new group conversation, or renames `group`.
+struct GroupNameSheet: View {
+	@EnvironmentObject var app: AppModel
+	@Environment(\.dismiss) private var dismiss
+	let group: Contact?
+	@State private var name = ""
+	private var trimmed: String { name.trimmingCharacters(in: .whitespaces) }
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			Text(group == nil ? "Start a Group Conversation" : "Rename Group Conversation")
+				.font(.system(size: 15, weight: .semibold)).foregroundStyle(WLM.ink)
+			Text("Name:").font(.system(size: 11)).foregroundStyle(WLM.ink)
+			TextField("", text: $name)
+				.textFieldStyle(.roundedBorder)
+				.onSubmit(done)
+			if group == nil {
+				Text("Once it's open, use Invite to add people.")
+					.font(.system(size: 10)).foregroundStyle(WLM.muted)
+			}
+			HStack {
+				Spacer()
+				Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+				Button(group == nil ? "Start" : "Rename", action: done).keyboardShortcut(.defaultAction).disabled(trimmed.isEmpty)
+			}
+		}
+		.padding(18)
+		.frame(width: 340)
+		.onAppear { name = group?.displayName ?? "" }
+	}
+
+	private func done() {
+		guard !trimmed.isEmpty else { return }
+		if let group { app.renameGroup(group.email, to: trimmed) } else { app.startGroup(named: trimmed) }
+		dismiss()
+	}
+}
+
+/// "X has added you to their contact list" (WLM 8.1 wording), or X's
+/// invitation to a group conversation (then `request.email` is the group).
 struct AddedYouSheet: View {
 	@EnvironmentObject var app: AppModel
 	let request: AppModel.AddRequest
 	@State private var allow = true
 	@State private var addToList = true
+	private var group: Contact? { app.contact(request.email).flatMap { $0.isGroup ? $0 : nil } }
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 12) {
 			HStack(spacing: 10) {
 				UserTile(seed: request.email, size: 40, picture: app.displayPicture(of: request.email))
 				VStack(alignment: .leading, spacing: 2) {
-					Text("\(request.displayName) (\(request.email))").font(.system(size: 12, weight: .semibold)).foregroundStyle(WLM.ink)
-					Text("has added you to his or her contact list.").font(.system(size: 12)).foregroundStyle(WLM.ink)
+					Text(group == nil ? "\(request.displayName) (\(request.email))" : request.displayName)
+						.font(.system(size: 12, weight: .semibold)).foregroundStyle(WLM.ink)
+					Text(group.map { "has invited you to the group conversation \($0.displayName)." } ?? "has added you to his or her contact list.")
+						.font(.system(size: 12)).foregroundStyle(WLM.ink)
 				}
 			}
 			Picker("", selection: $allow) {
-				Text("Allow this person to see when you are online and contact you").tag(true)
-				Text("Block this person from seeing when you are online and contacting you").tag(false)
+				Text(group == nil ? "Allow this person to see when you are online and contact you" : "Join this group conversation").tag(true)
+				Text(group == nil ? "Block this person from seeing when you are online and contacting you" : "Decline the invitation").tag(false)
 			}
 			.pickerStyle(.radioGroup)
 			.labelsHidden()
 			.font(.system(size: 11))
-			Toggle("Add this person to my contact list", isOn: $addToList)
-				.toggleStyle(.checkbox)
-				.font(.system(size: 11))
-				.disabled(!allow)
+			if group == nil {
+				Toggle("Add this person to my contact list", isOn: $addToList)
+					.toggleStyle(.checkbox)
+					.font(.system(size: 11))
+					.disabled(!allow)
+			}
 			HStack {
 				Spacer()
 				Button("OK") { app.respond(to: request, allow: allow, addToList: allow && addToList) }
@@ -401,4 +467,5 @@ struct AddedYouSheet: View {
 
 extension Notification.Name {
 	static let addContactRequested = Notification.Name("addContactRequested")
+	static let newGroupRequested = Notification.Name("newGroupRequested")
 }
