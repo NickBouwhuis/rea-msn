@@ -360,6 +360,7 @@ final class MainWindow {
 		// The menu button: what the Contacts menu holds on macOS.
 		let menu = vbox(0)
 		let (contactsButton, contactsPopover) = menuButton(picture(skin.image(R.viewMenu)), content: menu, css: ["wlm-flat"])
+		gtk_widget_set_tooltip_text(c(contactsButton), "Contacts menu")
 		append(menu, menuItem(skin.string(49110, "Add a contact") + "...") { [weak self] in
 			popdown(contactsPopover)
 			self?.promptAddContact()
