@@ -162,9 +162,15 @@ double_click() {
 	xdotool mousemove 1300 850
 }
 # place WINDOW-TITLE X Y: conversation windows go beside the contact list.
+# Dialogs have the main window's title: of the windows called that, the
+# tallest is meant.
 place() {
-	local id
-	id=$(xdotool search --name "^$1\$" | tail -1) && [ -n "$id" ] && xdotool windowmove "$id" "$2" "$3"
+	local best= height=0 id h
+	for id in $(xdotool search --name "^$1\$"); do
+		h=$(xdotool getwindowgeometry --shell "$id" | sed -n 's/^HEIGHT=//p')
+		if [ "${h:-0}" -gt "$height" ]; then best=$id height=$h; fi
+	done
+	[ -n "$best" ] && xdotool windowmove "$best" "$2" "$3"
 	sleep 0.5
 }
 MAIN="Windows Live Messenger"
@@ -247,6 +253,7 @@ if appears "Verify this session" 40 --exact; then
 		FAILED=1
 	fi
 	press "Contacts menu" --exact
+	place "$MAIN" 20 20
 else
 	echo "no verification prompt (the plain client, or the account's first session)"
 fi
