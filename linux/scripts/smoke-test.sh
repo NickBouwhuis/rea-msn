@@ -1,23 +1,28 @@
 #!/bin/bash
-# Runs Messenger for Matrix (GTK) for real and clicks through its group
-# conversation features, saving a screenshot at each step: the screenshots are
-# the result (see .github/workflows/gtk-smoke.yml). The other people are played
-# over the Matrix API.
+# Runs the GTK apps for real and clicks through them, saving a screenshot at
+# each step: the screenshots are the result (see .github/workflows/gtk-smoke.yml).
+#
+# SCENARIO=matrix (the default): Messenger for Matrix against devserver/matrix's
+# Synapse, fresh (alice, bob and carol, password 123456), through its group
+# conversation features; the other people are played over the Matrix API.
+# SCENARIO=escargot: Windows Live Messenger against devserver's Escargot
+# server: signs in, has no Matrix items in its menu, and gets a message that
+# MSNCTL (the msnctl binary) sends as Bob.
 #
 # Needs a display with a window manager's worth of room (xvfb-run), a session
 # bus (dbus-run-session), and: openbox xdotool imagemagick at-spi2-core
-# gir1.2-atspi-2.0 python3-gi curl jq. The homeserver is devserver/matrix's
-# Synapse, fresh: alice, bob and carol with password 123456.
+# gir1.2-atspi-2.0 python3-gi curl jq.
 #
 #   APP=path/to/MatrixMessengerGTK OUT=smoke \
 #     dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 HS="${HS:-http://127.0.0.1:8008}"
-APP="${APP:?path to the MatrixMessengerGTK binary}"
+SCENARIO="${SCENARIO:-matrix}"
+APP="${APP:?path to the MatrixMessengerGTK (or, for SCENARIO=escargot, MessengerGTK) binary}"
 OUT="${OUT:-smoke}"
 mkdir -p "$OUT"
-exec > >(tee "$OUT/smoke.log") 2>&1
+exec > >(tee "$OUT/smoke-$SCENARIO.log") 2>&1
 FAILED=0
 
 say() { echo; echo "== $*"; }
@@ -31,8 +36,9 @@ api() {
 	curl -sS -X "$2" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' ${4:+-d "$4"} "$HS/_matrix/client/v3$3"
 }
 
-# --- The accounts' side of things, before the app starts ---------------------
+# --- Matrix: the accounts' side of things, before the app starts --------------
 
+matrix_setup() {
 A=$(login alice) B=$(login bob) C=$(login carol)
 for who in "$A Alice @alice:localhost" "$B Bob @bob:localhost" "$C Carol @carol:localhost"; do
 	set -- $who
@@ -61,17 +67,23 @@ api "$C" POST /createRoom '{"preset":"public_chat","name":"Open room","room_alia
 	sleep 10
 done) &
 KEEPER=$!
+}
 
 # --- The app -----------------------------------------------------------------
 
-openbox >/dev/null 2>&1 &
-sleep 1
-HOMEDIR="$(mktemp -d)"
-GSK_RENDERER=cairo GDK_BACKEND=x11 XDG_CONFIG_HOME="$HOMEDIR/config" XDG_DATA_HOME="$HOMEDIR/data" \
-	MESSENGER_MATRIX_HOMESERVER="$HS" MESSENGER_AUTOLOGIN=@alice:localhost:123456 MESSENGER_DEBUG=1 \
-	"$APP" >"$OUT/app.log" 2>&1 &
-APP_PID=$!
+KEEPER=
+APP_PID=
 trap 'kill $APP_PID $KEEPER 2>/dev/null' EXIT
+# launch NAME=VALUE...: the app, signed in through its development hooks.
+launch() {
+	openbox >/dev/null 2>&1 &
+	sleep 1
+	local home
+	home="$(mktemp -d)"
+	env GSK_RENDERER=cairo GDK_BACKEND=x11 XDG_CONFIG_HOME="$home/config" XDG_DATA_HOME="$home/data" MESSENGER_DEBUG=1 "$@" \
+		"$APP" >"$OUT/app-$SCENARIO.log" 2>&1 &
+	APP_PID=$!
+}
 
 at() { python3 "$HERE/smoke-at.py" "$@"; }
 # shot NAME [SECONDS to settle]
@@ -144,6 +156,42 @@ place() {
 	sleep 0.5
 }
 MAIN="Windows Live Messenger"
+
+# --- Windows Live Messenger (Escargot) ----------------------------------------
+
+escargot_scenario() {
+launch MESSENGER_SERVER=local MESSENGER_AUTOLOGIN=alice@example.com:123456
+
+say "Signed in to the Escargot dev server"
+wait_for "You don't have any contacts yet."
+place "$MAIN" 20 20
+shot e01-signed-in 2
+
+say "Its Contacts menu has nothing of Matrix's"
+press "Contacts menu" --exact
+shot e02-contacts-menu
+at find "Add a contact..." --exact >/dev/null 2>&1 || { echo "!! no Add a contact... in the menu"; FAILED=1; }
+for item in "Start a group conversation..." "Verify this session..."; do
+	if at find "$item" --exact >/dev/null 2>&1; then
+		echo "!! the menu offers $item"
+		FAILED=1
+	fi
+done
+press "Contacts menu" --exact
+
+say "A message from Bob opens a conversation"
+"${MSNCTL:?path to the msnctl binary}" --local say bob@example.com 123456 alice@example.com "Hello from Bob" 8 >"$OUT/msnctl-escargot.log" 2>&1 &
+wait_for "bob@example.com" --in "bob@example.com"
+place "bob@example.com" 420 20
+shot e03-conversation 4
+at dump >"$OUT/tree-escargot.txt"
+}
+
+# --- Messenger for Matrix ------------------------------------------------------
+
+matrix_scenario() {
+matrix_setup
+launch MESSENGER_MATRIX_HOMESERVER="$HS" MESSENGER_AUTOLOGIN=@alice:localhost:123456
 
 say "Signed in"
 wait_for "Group conversations"
@@ -230,7 +278,13 @@ if at find "Weekend plans" --in "$MAIN" >/dev/null 2>&1; then
 	FAILED=1
 fi
 shot 15-after-leaving
-
 at dump >"$OUT/tree-final.txt"
+}
+
+case "$SCENARIO" in
+	matrix) matrix_scenario ;;
+	escargot) escargot_scenario ;;
+	*) echo "SCENARIO is matrix or escargot" >&2; exit 2 ;;
+esac
 say "Done: $([ $FAILED = 0 ] && echo 'every step found what it looked for' || echo 'some steps failed, see above')"
 exit $FAILED

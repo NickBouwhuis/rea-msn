@@ -1,7 +1,8 @@
-# Runs Messenger for Matrix (GTK) for real on Ubuntu: against the dev Synapse,
-# under a virtual display, clicked through the group conversation features by
-# linux/scripts/smoke-test.sh. The screenshots it takes are the result: download
-# the "gtk-smoke" artifact and look at them. Run it by hand (Actions ▸ GTK smoke
+# Runs the GTK apps for real on Ubuntu, under a virtual display, clicked through
+# by linux/scripts/smoke-test.sh: Messenger for Matrix against the dev Synapse
+# (its group conversation features), then Windows Live Messenger against the
+# dev Escargot server. The screenshots it takes are the result: download the
+# "gtk-smoke" artifact and look at them. Run it by hand (Actions ▸ GTK smoke
 # test ▸ Run workflow, or `gh workflow run gtk-smoke.yml`).
 name: GTK smoke test
 
@@ -18,7 +19,7 @@ env:
 
 jobs:
   smoke:
-    name: Messenger for Matrix on Ubuntu 24.04
+    name: Both GTK apps on Ubuntu 24.04
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -68,6 +69,8 @@ jobs:
         run: |
           . "$HOME/.local/share/swiftly/env.sh"
           swift build --product MatrixMessengerGTK
+          swift build --product MessengerGTK
+          swift build --product msnctl
       - uses: actions/cache/save@v4
         if: steps.cache.outputs.cache-hit != 'true'
         with:
@@ -86,9 +89,24 @@ jobs:
           done
           docker compose -f devserver/matrix/docker-compose.yml logs | tail -50
           exit 1
-      - name: Click through the app
+      - name: Click through Messenger for Matrix
         run: |
           APP="$PWD/Messenger/.build/debug/MatrixMessengerGTK" OUT="$PWD/smoke" \
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
+      - name: Start the Escargot dev server
+        if: always()
+        run: |
+          docker compose -f devserver/docker-compose.yml up -d --build
+          for i in $(seq 1 60); do
+            (exec 3<>/dev/tcp/127.0.0.1/1863) 2>/dev/null && exit 0
+            sleep 2
+          done
+          docker compose -f devserver/docker-compose.yml logs | tail -50
+          exit 1
+      - name: Click through Windows Live Messenger
+        if: always()
+        run: |
+          SCENARIO=escargot APP="$PWD/Messenger/.build/debug/MessengerGTK" MSNCTL="$PWD/Messenger/.build/debug/msnctl" OUT="$PWD/smoke" \
             dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
       - uses: actions/upload-artifact@v4
         if: always()
