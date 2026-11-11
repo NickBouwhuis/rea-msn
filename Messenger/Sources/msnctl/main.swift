@@ -418,7 +418,7 @@ func run() async {
 			print("wink sent to \(args[3])")
 			try await Task.sleep(nanoseconds: UInt64((args.count > 5 ? Double(args[5]) ?? 20 : 20) * 1_000_000_000))
 			client.signOut()
-		#if os(macOS)
+		#if canImport(MatrixRustSDK)
 		case "verify-wait" where cli.matrix && args.count >= 3:
 			try await cli.verifyResponder(args[1], password(args[2]), seconds: Double(args.count > 3 ? args[3] : "90") ?? 90)
 		case "verify" where cli.matrix && args.count == 3:

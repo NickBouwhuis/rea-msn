@@ -184,7 +184,7 @@ extension CLI {
 			guard a2.personalMessage == "Ported with rea + Ghidra" else { throw MSNPError.unexpected("PSM not kept: \(a2.personalMessage)") }
 			a2.signOut()
 		}
-		#if os(macOS)
+		#if canImport(MatrixRustSDK)
 		try await step("a remembered session comes back without the password, as the same device, with history") {
 			let store = MemoryMatrixSessionStore()
 			let dir = FileManager.default.temporaryDirectory.appendingPathComponent("msnctl-\(UUID().uuidString)", isDirectory: true)
@@ -456,7 +456,7 @@ extension CLI {
 		if let failure { throw failure }
 	}
 
-	#if os(macOS)  // matrix-rust-sdk, which has verification, is macOS-only so far
+	#if canImport(MatrixRustSDK)  // verification needs matrix-rust-sdk
 	/// Signs in and, for `seconds`, accepts verification requests from your
 	/// other sessions, confirming the emoji. On a fresh account this first
 	/// session sets up cross-signing, so it can verify the others.

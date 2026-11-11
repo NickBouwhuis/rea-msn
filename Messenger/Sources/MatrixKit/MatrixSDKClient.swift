@@ -1,6 +1,8 @@
 #if canImport(MatrixRustSDK)
 import Foundation
+#if canImport(ImageIO)
 import ImageIO
+#endif
 import MatrixRustSDK
 import MSNKit
 #if canImport(UniformTypeIdentifiers)
@@ -120,12 +122,22 @@ public final class MatrixClient: IMService {
 
 	private static var goodbyes: [String: Task<Void, Never>] = [:]
 
+	/// Where sessions are kept between launches: the login Keychain, or
+	/// elsewhere a private file per account beside the stores.
+	public nonisolated static var defaultStore: MatrixSessionStore {
+		#if canImport(Security)
+		KeychainMatrixSessionStore()
+		#else
+		FileMatrixSessionStore(directory: defaultDirectory.appendingPathComponent("Sessions", isDirectory: true))
+		#endif
+	}
+
 	public nonisolated static var defaultDirectory: URL {
 		FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
 			.appendingPathComponent("MessengerMac/Matrix", isDirectory: true)
 	}
 
-	public init(homeserver: URL? = nil, store: MatrixSessionStore = KeychainMatrixSessionStore(),
+	public init(homeserver: URL? = nil, store: MatrixSessionStore = MatrixClient.defaultStore,
 	            directory: URL = MatrixClient.defaultDirectory) {
 		self.homeserver = homeserver
 		self.store = store
@@ -151,7 +163,7 @@ public final class MatrixClient: IMService {
 	/// How `userID` signs in here, so the sign-in window can drop the password
 	/// box: a saved session, else password when offered, else the browser.
 	public nonisolated static func signInMethod(for userID: String, homeserver: URL? = nil,
-	                                            store: MatrixSessionStore = KeychainMatrixSessionStore()) async throws -> SignInMethod {
+	                                            store: MatrixSessionStore = MatrixClient.defaultStore) async throws -> SignInMethod {
 		guard let serverName = MatrixID.serverName(of: userID) else { throw MatrixError.badUserID(userID) }
 		if store.load(userID) != nil { return .savedSession }
 		let base: URL
@@ -1142,11 +1154,17 @@ public final class MatrixClient: IMService {
 		}
 	}
 
+	/// A picture's size, for other clients to lay it out before it loads
+	/// (nil where there's no ImageIO to ask).
 	private nonisolated static func imageSize(_ data: Data) -> (width: Int, height: Int)? {
+		#if canImport(ImageIO)
 		guard let source = CGImageSourceCreateWithData(data as CFData, nil),
 		      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
 		      let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
 		return (width, height)
+		#else
+		return nil
+		#endif
 	}
 
 	public func sendNudge(to peer: String) async throws {

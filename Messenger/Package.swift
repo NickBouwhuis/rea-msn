@@ -1,12 +1,15 @@
 // swift-tools-version: 5.10
+import Foundation
 import PackageDescription
 
 // Two apps, each for macOS (SwiftUI/AppKit) and Linux (GTK4), from one set of
 // windows (MessengerUI, MessengerGTKUI) over MSNKit's IMService:
 // - Messenger: Escargot (MSNP15, MSNKit)
-// - Messenger for Matrix (MatrixMessenger*): MatrixKit, on macOS through
-//   matrix-rust-sdk (end-to-end encryption, verification), on Linux for now
-//   over the plain client-server API.
+// - Messenger for Matrix (MatrixMessenger*): MatrixKit, through matrix-rust-sdk
+//   (end-to-end encryption, verification): a release of its Swift package on
+//   macOS, and on Linux a build of the same commit that
+//   linux/scripts/build-matrix-sdk.sh puts in Vendor/MatrixSDK. A Linux build
+//   without that folder is the plain client-server client, unencrypted.
 var targets: [Target] = [
 	// zlib, for MSZIP-compressed wink cabinets (MSNKit/Util/Cabinet.swift).
 	.systemLibrary(name: "CZlib", providers: [.apt(["zlib1g-dev"])]),
@@ -25,7 +28,21 @@ var dependencies: [Package.Dependency] = []
 dependencies.append(.package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"))
 targets += [
 	.target(name: "MSNKit", dependencies: ["CZlib", .product(name: "Crypto", package: "swift-crypto")]),
-	.target(name: "MatrixKit", dependencies: ["MSNKit"]),
+]
+let sdk = Context.packageDirectory + "/Vendor/MatrixSDK"
+if FileManager.default.fileExists(atPath: sdk + "/lib/libmatrix_sdk_ffi.a") {
+	targets += [
+		.systemLibrary(name: "MatrixSDKFFI", path: "Vendor/MatrixSDK/include"),
+		.target(name: "MatrixRustSDK", dependencies: ["MatrixSDKFFI"], path: "Vendor/MatrixSDK/swift",
+		        swiftSettings: [.unsafeFlags(["-suppress-warnings"])],
+		        linkerSettings: [.unsafeFlags(["-L\(sdk)/lib"]), .linkedLibrary("matrix_sdk_ffi"),
+		                         .linkedLibrary("m"), .linkedLibrary("dl"), .linkedLibrary("pthread")]),
+		.target(name: "MatrixKit", dependencies: ["MSNKit", "MatrixRustSDK"]),
+	]
+} else {
+	targets.append(.target(name: "MatrixKit", dependencies: ["MSNKit"]))
+}
+targets += [
 	.systemLibrary(name: "CGtk", pkgConfig: "gtk4", providers: [.apt(["libgtk-4-dev"])]),
 	.target(name: "MessengerGTKUI", dependencies: ["MSNKit", "CGtk"]),
 	.executableTarget(name: "MessengerGTK", dependencies: ["MessengerGTKUI", "MSNKit"]),
