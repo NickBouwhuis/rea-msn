@@ -120,21 +120,36 @@ public struct MatrixAPI: Sendable {
 	/// A display-picture-sized thumbnail of an mxc:// URL, through authenticated
 	/// media (v1.11), or the older unauthenticated endpoint on servers without it.
 	public func thumbnail(_ mxc: String, size: Int = 96) async throws -> Data {
+		try await media("thumbnail", mxc, query: ["width": String(size), "height": String(size), "method": "crop"])
+	}
+
+	/// The file behind an mxc:// URL.
+	public func download(_ mxc: String) async throws -> Data {
+		try await media("download", mxc, timeout: 300)
+	}
+
+	private func media(_ what: String, _ mxc: String, query: [String: String] = [:], timeout: TimeInterval = 30) async throws -> Data {
 		guard mxc.hasPrefix("mxc://") else { throw MatrixError.badResponse("not an mxc:// URL: \(mxc)") }
 		let parts = mxc.dropFirst("mxc://".count).split(separator: "/", maxSplits: 1).map(String.init)
 		guard parts.count == 2 else { throw MatrixError.badResponse("bad mxc:// URL: \(mxc)") }
 		let path = "/\(Self.segment(parts[0]))/\(Self.segment(parts[1]))"
-		let query = ["width": String(size), "height": String(size), "method": "crop"]
 		do {
-			return try await data("GET", "/_matrix/client/v1/media/thumbnail" + path, query: query)
+			return try await data("GET", "/_matrix/client/v1/media/\(what)" + path, query: query, timeout: timeout)
 		} catch MatrixError.server(let status, _, _) where status == 404 || status == 400 {
-			return try await data("GET", "/_matrix/media/v3/thumbnail" + path, query: query)
+			return try await data("GET", "/_matrix/media/v3/\(what)" + path, query: query, timeout: timeout)
 		}
+	}
+
+	/// Uploads a file; returns its mxc:// URL.
+	public func upload(_ file: Data, filename: String, mimeType: String) async throws -> String {
+		let reply = try await data("POST", "/_matrix/media/v3/upload", query: ["filename": filename], upload: (file, mimeType), timeout: 300)
+		guard let url = (try? JSON(data: reply))?["content_uri"].string else { throw MatrixError.badResponse("upload without content_uri") }
+		return url
 	}
 
 	/// The raw response body of a request; non-2xx statuses throw MatrixError.server.
 	public func data(_ method: String, _ path: String, query: [String: String] = [:], body: JSON? = nil,
-	                 timeout: TimeInterval = 30) async throws -> Data {
+	                 upload: (data: Data, mimeType: String)? = nil, timeout: TimeInterval = 30) async throws -> Data {
 		let full = path.hasPrefix("/_matrix/") ? path : "/_matrix/client/v3" + path
 		guard var components = URLComponents(string: base + full) else {
 			throw MatrixError.badResponse("bad URL \(full)")
@@ -152,6 +167,9 @@ public struct MatrixAPI: Sendable {
 		if let body {
 			req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 			req.httpBody = body.encoded()
+		} else if let upload {
+			req.setValue(upload.mimeType, forHTTPHeaderField: "Content-Type")
+			req.httpBody = upload.data
 		}
 		for attempt in 1... {
 			let (data, response) = try await session.data(for: req)

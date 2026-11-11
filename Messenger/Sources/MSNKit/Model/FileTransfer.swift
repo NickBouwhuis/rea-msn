@@ -1,6 +1,7 @@
 import Foundation
 
-/// A file sent or received through the switchboard (MSNSLP file transfer).
+/// A file sent or received: through the switchboard (MSNSLP file transfer), or
+/// on Matrix as an uploaded file, where accepting one downloads it.
 public struct FileTransfer: Identifiable, Equatable {
 	public enum State: Equatable {
 		/// Incoming, waiting for us to accept or decline.
@@ -22,6 +23,7 @@ public struct FileTransfer: Identifiable, Equatable {
 	}
 
 	public let id: String
+	/// Who the transfer is with (in a group conversation, who offers the file).
 	public let peer: String
 	public let name: String
 	public let size: UInt64
@@ -34,4 +36,14 @@ public struct FileTransfer: Identifiable, Equatable {
 	public var cancelledByMe = false
 
 	public var progress: Double { size == 0 ? 1 : Double(transferred) / Double(size) }
+
+	public init(id: String, peer: String, name: String, size: UInt64, incoming: Bool, state: State, fileURL: URL? = nil) {
+		self.id = id
+		self.peer = peer
+		self.name = name
+		self.size = size
+		self.incoming = incoming
+		self.state = state
+		self.fileURL = fileURL
+	}
 }

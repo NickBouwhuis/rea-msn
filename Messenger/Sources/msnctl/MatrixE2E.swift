@@ -16,6 +16,7 @@ extension CLI {
 		var texts: [String] = []
 		var formats: [String: TextFormat] = [:]
 		var pictures: [String: Data] = [:]
+		var files: [String: FileTransfer] = [:]
 		var addedPrompts: [String] = []
 		for (client, tag) in [(a, "A"), (b, "B")] {
 			client.onEvent = { event in
@@ -27,6 +28,7 @@ extension CLI {
 						formats[text] = format
 					}
 					if case let .picture(_, _, data, filename) = kind { pictures["\(tag):\(filename)"] = data }
+					if case let .file(transfer) = kind { files["\(tag):\(transfer.name)"] = transfer }
 				case let .addedBy(email, _):
 					addedPrompts.append("\(tag):\(email)")
 				default:
@@ -143,6 +145,20 @@ extension CLI {
 				await a.sendPicture(to: idB, data: png, filename: "pixel-\(run).png")
 				try await waitFor("B gets the picture") { pictures["B:pixel-\(run).png"] == png }
 			}
+		}
+		try await step("file (m.file): A sends one, B accepts it and has the same bytes") {
+			let name = "notes-\(run).txt", bytes = Data("Shared over Matrix \(run)\n".utf8)
+			let source = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+			let saved = FileManager.default.temporaryDirectory.appendingPathComponent("received-\(name)")
+			try bytes.write(to: source)
+			try a.sendFile(source, to: idB)
+			try await waitFor("B is offered the file") { files["B:\(name)"]?.state == .offered }
+			guard let offer = files["B:\(name)"], offer.incoming, offer.peer == a.email else { throw MSNPError.unexpected("not offered by A") }
+			b.acceptFile(offer.id, saveTo: saved)
+			try await waitFor("both sides are done") { files["B:\(name)"]?.state == .completed && files["A:\(name)"]?.state == .completed }
+			guard try Data(contentsOf: saved) == bytes else { throw MSNPError.unexpected("the saved file differs") }
+			try? FileManager.default.removeItem(at: source)
+			try? FileManager.default.removeItem(at: saved)
 		}
 		try await step("B signs out and A sees Offline") {
 			b.signOut()
@@ -317,14 +333,28 @@ extension CLI {
 			await b.sendMessage(to: group, text: "after opening \(run)")
 			try await waitFor("A receives it once open") { received("A", group, "after opening \(run)") }
 		}
+		let mentionsRule = "/pushrules/global/room/\(MatrixAPI.segment(group))"
+		try await step("set to mentions only, the group speaks up only when A is mentioned") {
+			_ = try await apiA.call("DELETE", muteRule)
+			_ = try await apiA.call("PUT", mentionsRule, body: ["actions": []])
+			a.closeConversation(with: group)
+			try await Task.sleep(nanoseconds: 13_000_000_000)
+			await b.sendMessage(to: group, text: "nothing to see \(run)")
+			_ = try await c.call("PUT", "/rooms/\(MatrixAPI.segment(group))/send/m.room.message/mention\(run)", body: [
+				"msgtype": "m.text", "body": .string("look at this \(run)"), "m.mentions": ["user_ids": [.string(a.email)]],
+			])
+			try await waitFor("A receives the mention") { received("A", group, "look at this \(run)") }
+			guard !received("A", group, "nothing to see \(run)") else { throw MSNPError.unexpected("a message without a mention came through") }
+		}
 		try await step("B leaves the group; A is told") {
+			_ = a.participants(inConversationWith: group)  // open again, to hear who leaves
 			try await b.removeContact(group)
 			guard b.contacts[group] == nil else { throw MSNPError.unexpected("the group is still on B's list") }
 			try await waitFor("A hears that B left") { received("A", group, "left(email: \"\(idB)\")") }
 		}
 		try await step("reset: A and C leave the group") {
 			try await a.removeContact(group)
-			_ = try? await apiA.call("DELETE", muteRule)
+			_ = try? await apiA.call("DELETE", mentionsRule)
 			_ = try? await apiA.call("POST", "/logout", body: [:])
 			_ = try await c.call("POST", "/rooms/\(MatrixAPI.segment(group))/leave", body: [:])
 		}

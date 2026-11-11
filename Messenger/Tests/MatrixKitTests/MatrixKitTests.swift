@@ -16,6 +16,26 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertFalse(MatrixID.isUserID("@al ice:matrix.org"))
 	}
 
+	func testMentions() {
+		func mentioned(_ content: JSON) -> Bool { MatrixMessage.mentions(content, user: "@alice:matrix.org", displayName: "Alice ☕") }
+		XCTAssertTrue(mentioned(["body": "hi", "m.mentions": ["user_ids": ["@alice:matrix.org"]]]))
+		XCTAssertTrue(mentioned(["body": "hi all", "m.mentions": ["room": true]]))
+		XCTAssertFalse(mentioned(["body": "alice, look", "m.mentions": ["user_ids": ["@bob:matrix.org"]]]))  // the sender said who
+		XCTAssertFalse(mentioned(["body": "alice, look", "m.mentions": [:]]))
+		XCTAssertTrue(mentioned(["body": "ALICE, look"]))  // older clients: by name
+		XCTAssertFalse(mentioned(["body": "nothing to see"]))
+	}
+
+	func testAttachments() {
+		let file = MatrixMessage.file(name: "notes.txt", url: "mxc://matrix.org/abc", size: 12, mimeType: "text/plain")
+		let read = MatrixMessage.attachment(file)
+		XCTAssertEqual(read?.name, "notes.txt")
+		XCTAssertEqual(read?.url, "mxc://matrix.org/abc")
+		XCTAssertEqual(read?.size, 12)
+		XCTAssertNil(MatrixMessage.attachment(["msgtype": "m.text", "body": "hi", "url": "mxc://matrix.org/abc"]))
+		XCTAssertNil(MatrixMessage.attachment(["msgtype": "m.file", "body": "secret.txt", "file": ["url": "mxc://matrix.org/abc"]]))  // encrypted
+	}
+
 	func testRoomAddresses() {
 		XCTAssertTrue(MatrixID.isRoomAddress("#room:matrix.org"))
 		XCTAssertTrue(MatrixID.isRoomAddress("!AbCdEf:matrix.org"))

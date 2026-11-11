@@ -3,6 +3,9 @@ import Foundation
 import ImageIO
 import MatrixRustSDK
 import MSNKit
+#if canImport(UniformTypeIdentifiers)
+import UniformTypeIdentifiers
+#endif
 
 /// WLM on Matrix through matrix-rust-sdk, which brings end-to-end encryption,
 /// cross-signing verification and key backup. The mapping is the one in
@@ -96,10 +99,14 @@ public final class MatrixClient: IMService {
 	/// are followed: a timeline for every room would make signing in heavy on
 	/// an account with many.
 	private var activeGroups: Set<String> = []
-	/// Rooms muted (in Element, say; a push rule): a muted group stays quiet
-	/// until its conversation is opened.
-	private var muted: Set<String> = []
+	/// Rooms that don't notify about everything (set in Element, say; push
+	/// rules). Until its conversation is opened, a muted group stays quiet and
+	/// a mentions-only one speaks up only when you're mentioned.
+	private var quiet: [String: RoomNotificationMode] = [:]
 	private var notifications: NotificationSettings?
+	private let transfers = MatrixTransfers()
+	/// Received files not downloaded yet, by transfer (event) ID.
+	private var offeredFiles: [String: MediaSource] = [:]
 	private var ignored: Set<String> = []
 	private var names: [String: String] = [:]
 	private var avatarURLs: [String: String] = [:]
@@ -123,6 +130,9 @@ public final class MatrixClient: IMService {
 		self.homeserver = homeserver
 		self.store = store
 		self.directory = directory
+		transfers.report = { [weak self] conversation, transfer in
+			self?.onEvent?(.conversation(peer: conversation, .file(transfer)))
+		}
 	}
 
 	public static let supportsEncryption = true
@@ -362,8 +372,10 @@ public final class MatrixClient: IMService {
 		groupInviters = [:]
 		liveGroups = []
 		activeGroups = []
-		muted = []
+		quiet = [:]
 		notifications = nil
+		transfers.reset()
+		offeredFiles = [:]
 		typing = [:]
 		lastTypingSent = [:]
 		for key in contacts.keys { contacts[key]?.status = .offline }
@@ -462,7 +474,9 @@ public final class MatrixClient: IMService {
 				roomInfos[id] = info
 				if info.membership == .joined {
 					// Asked rather than read from RoomInfo, whose cached copy lags behind a change.
-					if (try? await notifications?.getUserDefinedRoomNotificationMode(roomId: id)) == .mute { muted.insert(id) } else { muted.remove(id) }
+					let mode = (try? await notifications?.getRoomNotificationSettings(
+						roomId: id, isEncrypted: info.encryptionState == .encrypted, isOneToOne: false))?.mode
+					quiet[id] = mode == .allMessages ? nil : mode
 				}
 				if info.membership == .joined, let ids = try? await room.activeHumanMemberIdsNoSync() {
 					let now = Set(ids), before = members[id]
@@ -722,11 +736,11 @@ public final class MatrixClient: IMService {
 
 	/// Whether room `id` is followed: every room a contact is in; a group while
 	/// its conversation is open, or once something happens in it, unless it
-	/// was muted (in Element, say), which keeps it quiet until it's opened.
+	/// is muted (see `quiet`).
 	private func follows(_ id: String) -> Bool {
 		guard let peer = roomPeer[id] else { return false }
 		if peer != id || liveGroups.contains(id) { return true }
-		return activeGroups.contains(id) && !muted.contains(id)
+		return activeGroups.contains(id) && quiet[id] != .mute
 	}
 
 	/// Follows rooms (see `follows`): a timeline for messages (it shows
@@ -773,6 +787,7 @@ public final class MatrixClient: IMService {
 	/// itself if it's decrypted later.
 	private func incoming(_ items: [EventTimelineItem], room id: String) {
 		guard let peer = roomPeer[id] else { return }
+		let mentionsOnly = peer == id && quiet[id] == .mentionsAndKeywordsOnly && !liveGroups.contains(id)
 		for item in items {
 			guard item.isRemote, !item.isOwn, case let .eventId(eventID) = item.eventOrTransactionId,
 			      !ignored.contains(item.sender), case let .msgLike(content) = item.content,
@@ -781,7 +796,7 @@ public final class MatrixClient: IMService {
 			let sender = item.sender, name = senderName(item)
 			switch content.kind {
 			case .unableToDecrypt:
-				guard delivered[eventID] == nil else { continue }
+				guard !mentionsOnly, delivered[eventID] == nil else { continue }
 				delivered[eventID] = false
 				typing[id]?.remove(sender)
 				log?("[matrix] \(eventID) from \(sender) can't be decrypted yet")
@@ -789,6 +804,9 @@ public final class MatrixClient: IMService {
 				                                            format: MatrixMessage.noticeFormat)))
 			case let .message(message):
 				guard delivered[eventID] != true else { continue }
+				let raw = Self.content(of: item, message: message)
+				// Held back, not dropped: it shows once the conversation is opened.
+				if mentionsOnly, !MatrixMessage.mentions(raw, user: email, displayName: displayName) { continue }
 				delivered[eventID] = true
 				typing[id]?.remove(sender)
 				if case let .image(image) = message.msgType {
@@ -802,7 +820,12 @@ public final class MatrixClient: IMService {
 					})
 					continue
 				}
-				let raw = Self.content(of: item, message: message)
+				if let file = Self.attachment(message.msgType) {
+					// Offered as an MSN file is: accepting it downloads it.
+					offeredFiles[eventID] = file.source
+					transfers.add(FileTransfer(id: eventID, peer: sender, name: file.name, size: file.size, incoming: true, state: .offered), in: peer)
+					continue
+				}
 				if MatrixMessage.isNudge(raw) {
 					onEvent?(.conversation(peer: peer, .nudge(from: sender)))
 				} else {
@@ -812,6 +835,16 @@ public final class MatrixClient: IMService {
 			default:
 				continue
 			}
+		}
+	}
+
+	/// A message that is a file to save (pictures are shown instead).
+	private static func attachment(_ type: MessageType) -> (name: String, source: MediaSource, size: UInt64)? {
+		switch type {
+		case let .file(c): return (c.filename, c.source, c.info?.size ?? 0)
+		case let .audio(c): return (c.filename, c.source, c.info?.size ?? 0)
+		case let .video(c): return (c.filename, c.source, c.info?.size ?? 0)
+		default: return nil
 		}
 	}
 
@@ -835,8 +868,10 @@ public final class MatrixClient: IMService {
 		}
 	}
 
-	/// The conversation's timeline, once watchConversations has made it.
+	/// The conversation's timeline, once watchConversations has made it (a
+	/// group's is made only when it's wanted: here, if not before).
 	private func timeline(for id: String) async -> Timeline? {
+		if isGroup(id), liveGroups.insert(id).inserted { watchConversations() }
 		for _ in 0..<50 {
 			if let timeline = timelines[id] { return timeline }
 			try? await Task.sleep(nanoseconds: 100_000_000)
@@ -1118,6 +1153,54 @@ public final class MatrixClient: IMService {
 		try await send(MatrixMessage.nudge(), in: try await conversationRoom(with: peer))
 	}
 
+	// MARK: - Files
+
+	public var supportsFileTransfer: Bool { true }
+
+	/// Uploads the file (encrypted first, in an encrypted room) and announces
+	/// it in an m.file message.
+	@discardableResult
+	public func sendFile(_ url: URL, to peer: String) throws -> FileTransfer {
+		guard client != nil else { throw MSNPError.disconnected }
+		let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.uint64Value ?? 0
+		let transfer = FileTransfer(id: UUID().uuidString, peer: peer, name: url.lastPathComponent, size: size, incoming: false,
+		                            state: .transferring, fileURL: url)
+		transfers.add(transfer, in: peer)
+		transfers.run(transfer.id) { [weak self] in
+			guard let self else { return nil }
+			let room = try await self.conversationRoom(with: peer)
+			guard let timeline = await self.timeline(for: room.id()) else { throw MatrixError.badResponse("the conversation isn't loaded yet") }
+			let params = UploadParameters(source: .file(filename: url.path), caption: nil, formattedCaption: nil, mentions: nil, inReplyTo: nil)
+			let info = FileInfo(mimetype: Self.mimeType(of: url), size: size, thumbnailInfo: nil, thumbnailSource: nil)
+			let upload = try timeline.sendFile(params: params, fileInfo: info)
+			try await withTaskCancellationHandler { try await upload.join() } onCancel: { upload.cancel() }
+			return nil
+		}
+		return transfer
+	}
+
+	/// Downloads the file (decrypting it if need be) to `url`.
+	public func acceptFile(_ id: String, saveTo url: URL) {
+		guard transfers.state(of: id) == .offered, let source = offeredFiles[id], let client else { return }
+		transfers.run(id) {
+			// shortcut: the whole file passes through memory; use getMediaFile if very large files matter.
+			let data = try await client.getMediaContent(mediaSource: source)
+			try Task.checkCancellation()
+			try data.write(to: url)
+			return url
+		}
+	}
+
+	public func declineFile(_ id: String) { transfers.decline(id) }
+	public func cancelFile(_ id: String) { transfers.cancel(id) }
+
+	private nonisolated static func mimeType(of url: URL) -> String {
+		#if canImport(UniformTypeIdentifiers)
+		if let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType { return type }
+		#endif
+		return "application/octet-stream"
+	}
+
 	public func closeConversation(with peer: String) {
 		if let id = existingRoom(with: peer), let room = rooms[id] { stopTyping(in: room) }
 		if liveGroups.remove(peer) != nil { watchConversations() }
@@ -1175,7 +1258,11 @@ public final class MatrixClient: IMService {
 	/// and leaves it.
 	public func participants(inConversationWith peer: String) -> [String] {
 		guard isGroup(peer) else { return [peer] }
-		if liveGroups.insert(peer).inserted { watchConversations() }
+		if liveGroups.insert(peer).inserted {
+			watchConversations()
+			// What a mentions-only group held back since sign-in shows now.
+			incoming((roomItems[peer] ?? []).compactMap { $0.asEvent() }, room: peer)
+		}
 		return (members[peer] ?? []).subtracting([email]).sorted()
 	}
 

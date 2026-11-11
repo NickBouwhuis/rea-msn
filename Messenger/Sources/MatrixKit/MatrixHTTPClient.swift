@@ -77,8 +77,16 @@ public final class MatrixClient: IMService {
 	/// Only those report who joins and leaves, as an MSN conversation does
 	/// only while it's open.
 	private var liveGroups: Set<String> = []
-	/// Rooms muted (in Element, say): quiet until their conversation is opened.
+	/// Rooms that don't notify about everything (set in Element, say; push
+	/// rules). Until its conversation is opened, a muted group stays quiet and
+	/// a mentions-only one speaks up only when you're mentioned; "mentions
+	/// only" can also be the account's default for rooms.
 	private var muted: Set<String> = []
+	private var mentionsOnly: Set<String> = []
+	private var mentionsOnlyByDefault = false
+	private let transfers = MatrixTransfers()
+	/// Received files not downloaded yet: transfer (event) ID → mxc:// URL.
+	private var offeredFiles: [String: String] = [:]
 	private var names: [String: String] = [:]
 	/// User → avatar mxc:// URL, and mxc:// URL → thumbnail (empty when the download failed).
 	private var avatarURLs: [String: String] = [:]
@@ -98,6 +106,9 @@ public final class MatrixClient: IMService {
 
 	public init(homeserver: URL? = nil) {
 		self.homeserver = homeserver
+		transfers.report = { [weak self] conversation, transfer in
+			self?.onEvent?(.conversation(peer: conversation, .file(transfer)))
+		}
 	}
 
 	public static let supportsEncryption = false
@@ -256,6 +267,10 @@ public final class MatrixClient: IMService {
 		memberCounts = [:]
 		liveGroups = []
 		muted = []
+		mentionsOnly = []
+		mentionsOnlyByDefault = false
+		transfers.reset()
+		offeredFiles = [:]
 		roomPeer = [:]
 		typing = [:]
 		lastTypingSent = [:]
@@ -357,11 +372,21 @@ public final class MatrixClient: IMService {
 			case "m.ignored_user_list":
 				ignored = Set(e["content"]["ignored_users"].object.keys)
 			case "m.push_rules":
-				// Muting a room is an override rule named after it that doesn't notify.
-				muted = Set(e["content"]["global"]["override"].array.filter { rule in
+				let rules = e["content"]["global"]
+				func silent(_ rule: JSON) -> Bool {
 					rule["enabled"].bool != false && !rule["actions"].array.contains { $0.string == "notify" }
-						&& rule["conditions"].array.contains { $0["key"].string == "room_id" }
-				}.compactMap { $0["rule_id"].string })
+				}
+				// Muting a room is an override rule named after it that doesn't
+				// notify. "Mentions only" is such a rule of the room kind, which
+				// the rules for mentions outrank; or, for every room, the rule
+				// for messages (.m.rule.message) switched off.
+				muted = Set(rules["override"].array
+					.filter { silent($0) && $0["conditions"].array.contains { $0["key"].string == "room_id" } }
+					.compactMap { $0["rule_id"].string })
+				mentionsOnly = Set(rules["room"].array.filter(silent).compactMap { $0["rule_id"].string })
+				mentionsOnlyByDefault = rules["underride"].array.contains {
+					$0["rule_id"].string == ".m.rule.message" && ($0["enabled"].bool == false || silent($0))
+				}
 			default:
 				break
 			}
@@ -423,8 +448,16 @@ public final class MatrixClient: IMService {
 		guard !initial else { return }
 
 		for (roomID, room) in rooms["join"].object {
-			guard let peer = roomPeer[roomID], !muted.contains(roomID) || liveGroups.contains(roomID) else { continue }
-			for e in room["timeline"]["events"].array { timelineEvent(e, room: roomID, peer: peer) }
+			guard let peer = roomPeer[roomID] else { continue }
+			// A quiet group (see `muted`) whose conversation isn't open.
+			let held = peer == roomID && !liveGroups.contains(roomID)
+			if held, muted.contains(roomID) { continue }
+			let onlyMentions = held && (mentionsOnly.contains(roomID) || mentionsOnlyByDefault)
+			for e in room["timeline"]["events"].array
+			where !onlyMentions || MatrixMessage.mentions(e["content"], user: email, displayName: displayName) {
+				timelineEvent(e, room: roomID, peer: peer)
+			}
+			if onlyMentions { continue }
 			for e in room["ephemeral"]["events"].array where e["type"].string == "m.typing" {
 				let now = Set(e["content"]["user_ids"].array.compactMap(\.string)).subtracting([email])
 				let started = now.subtracting(typing[roomID] ?? [])
@@ -472,6 +505,10 @@ public final class MatrixClient: IMService {
 			typing[roomID]?.remove(sender)
 			if MatrixMessage.isNudge(content) {
 				onEvent?(.conversation(peer: peer, .nudge(from: sender)))
+			} else if let file = MatrixMessage.attachment(content), let id = e["event_id"].string {
+				// Offered as an MSN file is: accepting it downloads it.
+				offeredFiles[id] = file.url
+				transfers.add(FileTransfer(id: id, peer: sender, name: file.name, size: file.size, incoming: true, state: .offered), in: peer)
 			} else if content["body"].string != nil {  // a redacted event has no body
 				let text = MatrixMessage.text(of: content, senderName: name)
 				onEvent?(.conversation(peer: peer, .message(from: sender, displayName: name, text: text, format: MatrixMessage.format(of: content))))
@@ -840,6 +877,45 @@ public final class MatrixClient: IMService {
 		let room = try await conversationRoom(with: peer)
 		try await send(MatrixMessage.nudge(), to: room)
 	}
+
+	// MARK: - Files
+
+	public var supportsFileTransfer: Bool { true }
+
+	/// Uploads the file and announces it in an m.file message.
+	@discardableResult
+	public func sendFile(_ url: URL, to peer: String) throws -> FileTransfer {
+		guard let api else { throw MSNPError.disconnected }
+		let name = url.lastPathComponent
+		let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.uint64Value ?? 0
+		let transfer = FileTransfer(id: UUID().uuidString, peer: peer, name: name, size: size, incoming: false, state: .transferring, fileURL: url)
+		transfers.add(transfer, in: peer)
+		transfers.run(transfer.id) { [weak self] in
+			guard let self else { return nil }
+			let room = try await self.conversationRoom(with: peer)
+			// shortcut: the whole file passes through memory; stream it if very large files matter.
+			let data = try Data(contentsOf: url)
+			let mxc = try await api.upload(data, filename: name, mimeType: "application/octet-stream")
+			try Task.checkCancellation()
+			try await self.send(MatrixMessage.file(name: name, url: mxc, size: UInt64(data.count), mimeType: "application/octet-stream"), to: room)
+			return nil
+		}
+		return transfer
+	}
+
+	/// Downloads the file to `url`.
+	public func acceptFile(_ id: String, saveTo url: URL) {
+		guard transfers.state(of: id) == .offered, let mxc = offeredFiles[id], let api else { return }
+		transfers.run(id) {
+			let data = try await api.download(mxc)
+			try Task.checkCancellation()
+			try data.write(to: url)
+			return url
+		}
+	}
+
+	public func declineFile(_ id: String) { transfers.decline(id) }
+	public func cancelFile(_ id: String) { transfers.cancel(id) }
 
 	public func closeConversation(with peer: String) {
 		if let room = existingRoom(with: peer) { stopTyping(in: room) }

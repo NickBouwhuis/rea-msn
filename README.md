@@ -158,7 +158,8 @@ onto Matrix like this:
 | Invite (in a conversation) | into a group: an invite to its room. Into a one-to-one chat: a new room for the three of you, so the newcomer can't read your DM |
 | Start a Group Conversation, Rename | a new private room (encrypted on macOS) with that name; `m.room.name` |
 | Add a contact, with a room's address | joins the room (`#room:server`, or a room ID) |
-| A room muted in another app | stays quiet (no window, sound or alert) until you open its conversation |
+| A room muted in another app | stays quiet (no window, sound or alert) until you open its conversation; one set to mentions only speaks up only when you're mentioned |
+| Share files | the file is uploaded (encrypted first, in an encrypted room on macOS) and sent as `m.file`; a received file, audio or video is offered like an MSN transfer, and accepting it downloads it |
 | Block | `m.ignored_user_list` |
 | Status | presence: Online is `online`, Appear Offline is `offline`, the away-type statuses are `unavailable` (shown as Away) |
 | Personal message | presence `status_msg` |
@@ -182,7 +183,7 @@ double-clicking one opens it.
 Not supported yet:
 - Matrix's newer OAuth 2.0 sign-in. Browser sign-in goes through the older SSO login that MAS and
   Synapse still offer for existing clients.
-- Other files, voice and video. Pictures only.
+- Voice and video.
 - Presence comes from polling every 10 seconds (the SDK doesn't expose presence events). On servers
   with presence turned off, contacts always look Offline, but you can still message them.
 - Linux: encryption and verification (see above).

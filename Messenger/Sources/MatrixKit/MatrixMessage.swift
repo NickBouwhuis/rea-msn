@@ -81,6 +81,31 @@ public enum MatrixMessage {
 		return lines.joined(separator: "\n")
 	}
 
+	/// Whether a message mentions `user`: the sender said so (m.mentions), or,
+	/// from clients that don't, its text has their name or ID's first part.
+	public static func mentions(_ content: JSON, user: String, displayName: String) -> Bool {
+		let said = content["m.mentions"]
+		if !said.isNull { return said["room"].bool == true || said["user_ids"].array.contains(.string(user)) }
+		let body = (content["body"].string ?? "").lowercased()
+		return [displayName, MatrixID.localpart(of: user)].contains { !$0.isEmpty && body.contains($0.lowercased()) }
+	}
+
+	/// A message that carries a file (m.file, m.audio, m.video, and m.image for
+	/// a client that doesn't show pictures): its name, mxc:// URL and size.
+	/// nil for an encrypted file, whose URL is in `file` with the key.
+	public static func attachment(_ content: JSON) -> (name: String, url: String, size: UInt64)? {
+		guard ["m.file", "m.audio", "m.video", "m.image"].contains(content["msgtype"].string ?? ""),
+		      let url = content["url"].string, url.hasPrefix("mxc://") else { return nil }
+		let name = content["filename"].string ?? content["body"].string ?? "file"
+		return (name.isEmpty ? "file" : name, url, UInt64(max(content["info"]["size"].int ?? 0, 0)))
+	}
+
+	/// An m.file message for an uploaded file.
+	public static func file(name: String, url: String, size: UInt64, mimeType: String) -> JSON {
+		["msgtype": "m.file", "body": .string(name), "filename": .string(name), "url": .string(url),
+		 "info": ["size": .number(Double(size)), "mimetype": .string(mimeType)]]
+	}
+
 	/// The MIME type of image data, from its first bytes.
 	public static func imageMimeType(_ data: Data) -> String {
 		let b = [UInt8](data.prefix(12))
