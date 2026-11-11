@@ -96,10 +96,22 @@ click() {
 	sleep 0.3
 	xdotool click "$button"
 	sleep 1
+	xdotool mousemove 1300 850  # away, so no tooltip covers the next widget
 }
 # press TEXT [find options]: a button or menu item, through its accessible action.
 press() {
 	if at press "$@"; then echo "press: $*"; else echo "!! nothing to press: $*"; FAILED=1; return 1; fi
+	sleep 1
+}
+# type_in PROMPT-TITLE TEXT: fills in the prompt dialog that just opened (its
+# box has the focus) and confirms. Nothing is typed if it didn't open: keys
+# would land wherever the focus is.
+type_in() {
+	wait_for "$1" --exact || return 1
+	xdotool key ctrl+a
+	xdotool type --delay 40 "$2"
+	shot "$3"
+	xdotool key Return
 	sleep 1
 }
 double_click() {
@@ -110,6 +122,7 @@ double_click() {
 	sleep 0.3
 	xdotool click --repeat 2 --delay 120 1
 	sleep 1
+	xdotool mousemove 1300 850
 }
 # place WINDOW-TITLE X Y: conversation windows go beside the contact list.
 place() {
@@ -142,55 +155,45 @@ shot 03-group-window 3
 say "Right-click a group: Rename, Leave; leaving asks first"
 click 3 "Weekend plans" --in "$MAIN"
 shot 04-group-menu
-press "Leave group conversation..."
-shot 05-leave-confirmation
-press "Cancel" --exact
+press "Leave group conversation..." && wait_for "Are you sure you want to leave the group conversation Weekend plans?" && {
+	shot 05-leave-confirmation
+	press "Cancel" --exact
+}
 
 say "The Contacts menu: start a group conversation"
 press "Contacts menu"
 shot 06-contacts-menu
-press "Start a group conversation..."
-shot 07-new-group-prompt
-xdotool type --delay 40 "Trip planning"
-xdotool key Return
-wait_for "Trip planning" --in "Trip planning"
-place "Trip planning" 420 400
-shot 08-new-group 2
+press "Start a group conversation..." && type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
+	wait_for "Trip planning" --in "Trip planning"
+	place "Trip planning" 420 400
+	shot 08-new-group 2
+}
 
 say "Rename it"
-click 3 "Trip planning" --in "$MAIN"
-press "Rename..."
-xdotool key ctrl+a
-xdotool type --delay 40 "Trip to Texel"
-shot 09-rename-prompt
-xdotool key Return
-wait_for "Trip to Texel" --in "$MAIN"
-shot 10-renamed 2
+click 3 "Trip planning" --in "$MAIN" && press "Rename..." && type_in "Rename group conversation" "Trip to Texel" 09-rename-prompt && {
+	wait_for "Trip to Texel" --in "$MAIN"
+	shot 10-renamed 2
+}
 
 say "Add a contact, with a room's address: joins it"
-press "Contacts menu"
-press "Add a contact..."
-xdotool type --delay 40 "#open-room:localhost"
-shot 11-add-contact-prompt
-xdotool key Return
-wait_for "Open room" --in "$MAIN"
-shot 12-joined-by-address 2
+press "Contacts menu" && press "Add a contact..." && type_in "Add a Contact" "#open-room:localhost" 11-add-contact-prompt && {
+	wait_for "Open room" --in "$MAIN"
+	shot 12-joined-by-address 2
+}
 
 say "Invite in a one-to-one conversation: a group of its own opens"
-double_click "Bob" --exact --in "$MAIN"
-wait_for "Bob" --in "Bob"
-place "Bob" 420 20
-press "Invite" --in "Bob"
-shot 13-invite-menu
-press "Carol" --exact --in "Bob"
-wait_for "Alice, Bob, Carol" --in "Alice, Bob, Carol"
-place "Alice, Bob, Carol" 760 300
-shot 14-group-from-invite 3
+double_click "Bob" --exact --in "$MAIN" && wait_for "Bob" --in "Bob" && {
+	place "Bob" 420 20
+	press "Invite" --in "Bob"
+	shot 13-invite-menu
+	press "Carol" --exact --in "Bob" && wait_for "Alice, Bob, Carol" --in "Alice, Bob, Carol" && {
+		place "Alice, Bob, Carol" 760 300
+		shot 14-group-from-invite 3
+	}
+}
 
 say "Leaving a group, after the confirmation"
-click 3 "Weekend plans" --in "$MAIN"
-press "Leave group conversation..."
-press "Leave" --exact
+click 3 "Weekend plans" --in "$MAIN" && press "Leave group conversation..." && press "Leave" --exact
 sleep 3
 if at find "Weekend plans" --in "$MAIN" >/dev/null 2>&1; then
 	echo "!! Weekend plans is still listed"

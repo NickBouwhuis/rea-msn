@@ -142,14 +142,17 @@ def main(args):
             elif corner := origin(window):
                 found.append((corner[0] + where[0] + where[2] // 2, corner[1] + where[1] + where[3] // 2))
         if len(found) > nth and args[0] == "press":
-            node = found[nth]
-            for _ in range(4):  # a button's label has no action of its own
+            # The widget with the action is the match itself, a later match
+            # inside it (a menu button's toggle), or what it sits in (a
+            # button around its label).
+            matches = found[nth:]
+            around = [m.get_parent() for m in matches]
+            for node in matches + around:
                 try:
-                    if node.get_n_actions() > 0 and node.do_action(0):
+                    if node is not None and node.get_n_actions() > 0 and node.do_action(0):
                         return 0
                 except Exception:
                     pass
-                node = node.get_parent()
             print(f"{wanted!r} can't be pressed", file=sys.stderr)
             return 1
         if len(found) > nth:
