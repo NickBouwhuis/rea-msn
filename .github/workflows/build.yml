@@ -106,10 +106,15 @@ jobs:
       - name: Install build dependencies
         run: |
           SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
-          $SUDO apt-get update
-          $SUDO apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev binutils g++ git cmake \
-            curl ca-certificates gnupg2 unzip tzdata pkg-config libcurl4-openssl-dev libxml2-dev \
-            libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev
+          # The package servers (or their DNS) fail now and then: a few tries.
+          for attempt in 1 2 3 4 5; do
+            timeout 300 $SUDO apt-get update && \
+              $SUDO apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev binutils g++ git cmake \
+                curl ca-certificates gnupg2 unzip tzdata pkg-config libcurl4-openssl-dev libxml2-dev \
+                libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev && break
+            [ "$attempt" != 5 ] || exit 1
+            sleep 60
+          done
       - uses: actions/checkout@v4
       # matrix-rust-sdk for Messenger for Matrix (end-to-end encryption): about
       # 15 minutes, so kept between runs until build-matrix-sdk.sh changes.

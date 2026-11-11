@@ -25,10 +25,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ cmake pkg-config libcurl4-openssl-dev libxml2-dev \
-            libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev \
-            xvfb openbox xdotool imagemagick dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi jq
+          # The package servers (or their DNS) fail now and then: a few tries.
+          for attempt in 1 2 3 4 5; do
+            timeout 300 sudo apt-get update && \
+              sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ cmake pkg-config libcurl4-openssl-dev libxml2-dev \
+                libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev \
+                xvfb openbox xdotool imagemagick dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi jq && break
+            [ "$attempt" != 5 ] || exit 1
+            sleep 60
+          done
       # matrix-rust-sdk, as the Build workflow's Ubuntu 24.04 job builds and keeps it.
       - uses: actions/cache/restore@v4
         id: matrix-sdk
