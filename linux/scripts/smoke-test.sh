@@ -163,9 +163,12 @@ press "Leave group conversation..." && wait_for "Are you sure you want to leave 
 say "The Contacts menu: start a group conversation"
 press "Contacts menu"
 shot 06-contacts-menu
-press "Start a group conversation..."
-shot 06b-after-menu-item 2
-at dump >"$OUT/tree-06b.txt"
+at dump >"$OUT/tree-06.txt"
+# The menu's items are in the popover's own window, whose place AT-SPI can't
+# tell; with the main window at 20,20 they are here. A real click, to see the
+# app as a person's click drives it.
+xdotool mousemove 300 210 click 1
+sleep 1
 type_in "Start a group conversation" "Trip planning" 07-new-group-prompt && {
 	wait_for "Trip planning" --in "Trip planning"
 	place "Trip planning" 420 400
@@ -179,7 +182,7 @@ click 3 "Trip planning" --in "$MAIN" && press "Rename..." && type_in "Rename gro
 }
 
 say "Add a contact, with a room's address: joins it"
-press "Contacts menu" && press "Add a contact..." && type_in "Add a Contact" "#open-room:localhost" 11-add-contact-prompt && {
+press "Contacts menu" && sleep 1 && xdotool mousemove 273 190 click 1 && sleep 1 && type_in "Add a Contact" "#open-room:localhost" 11-add-contact-prompt && {
 	wait_for "Open room" --in "$MAIN"
 	shot 12-joined-by-address 2
 }
