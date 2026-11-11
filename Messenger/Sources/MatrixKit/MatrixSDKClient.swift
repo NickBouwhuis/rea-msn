@@ -132,9 +132,17 @@ public final class MatrixClient: IMService {
 		#endif
 	}
 
+	/// Where each session's stores (and, off macOS, the sessions) are kept.
 	public nonisolated static var defaultDirectory: URL {
-		FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+		#if os(Linux)
+		// Beside the GTK app's own data ($XDG_DATA_HOME/messenger-wlm-matrix).
+		let data = ProcessInfo.processInfo.environment["XDG_DATA_HOME"].map { URL(fileURLWithPath: $0) }
+			?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share")
+		return data.appendingPathComponent("messenger-wlm-matrix/Matrix", isDirectory: true)
+		#else
+		return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
 			.appendingPathComponent("MessengerMac/Matrix", isDirectory: true)
+		#endif
 	}
 
 	public init(homeserver: URL? = nil, store: MatrixSessionStore = MatrixClient.defaultStore,
@@ -1176,7 +1184,8 @@ public final class MatrixClient: IMService {
 	public var supportsFileTransfer: Bool { true }
 
 	/// Uploads the file (encrypted first, in an encrypted room) and announces
-	/// it in an m.file message.
+	/// it in an m.file message, or a picture in an m.image, for other clients
+	/// to show it.
 	@discardableResult
 	public func sendFile(_ url: URL, to peer: String) throws -> FileTransfer {
 		guard client != nil else { throw MSNPError.disconnected }
@@ -1189,8 +1198,16 @@ public final class MatrixClient: IMService {
 			let room = try await self.conversationRoom(with: peer)
 			guard let timeline = await self.timeline(for: room.id()) else { throw MatrixError.badResponse("the conversation isn't loaded yet") }
 			let params = UploadParameters(source: .file(filename: url.path), caption: nil, formattedCaption: nil, mentions: nil, inReplyTo: nil)
-			let info = FileInfo(mimetype: Self.mimeType(of: url), size: size, thumbnailInfo: nil, thumbnailSource: nil)
-			let upload = try timeline.sendFile(params: params, fileInfo: info)
+			let head = (try? FileHandle(forReadingFrom: url))?.readData(ofLength: 12) ?? Data()
+			let image = MatrixMessage.imageMimeType(head)
+			let upload: SendAttachmentJoinHandle
+			if image.hasPrefix("image/") {
+				upload = try timeline.sendImage(params: params, thumbnailSource: nil, imageInfo: ImageInfo(
+					height: nil, width: nil, mimetype: image, size: size, thumbnailInfo: nil, thumbnailSource: nil, blurhash: nil, isAnimated: nil))
+			} else {
+				upload = try timeline.sendFile(params: params, fileInfo: FileInfo(
+					mimetype: Self.mimeType(of: url), size: size, thumbnailInfo: nil, thumbnailSource: nil))
+			}
 			try await withTaskCancellationHandler { try await upload.join() } onCancel: { upload.cancel() }
 			return nil
 		}

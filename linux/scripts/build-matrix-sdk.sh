@@ -8,9 +8,10 @@
 # (Messenger/Package.swift) was made from, so both platforms run the same SDK:
 # change them together.
 #
-# Needs git, a C compiler and cmake (for aws-lc), and Rust; rustup installs
-# Rust for you when cargo is missing. The first build takes 15 to 30 minutes.
-#   sudo apt install git build-essential cmake curl
+# Needs git, a C compiler, cmake (for aws-lc) and Rust (https://rustup.rs).
+# The first build takes about 15 minutes; after that it's a no-op until the
+# commit below changes.
+#   sudo apt install git build-essential cmake
 #   linux/scripts/build-matrix-sdk.sh
 set -eu
 SDK_COMMIT=e675036b27be102b05ec5c5bff843cf8d739338c  # matrix-rust-components-swift 26.10.27
@@ -23,9 +24,10 @@ if [ "$(cat "$OUT/commit" 2>/dev/null)" = "$SDK_COMMIT" ] && [ -f "$OUT/lib/libm
 	exit 0
 fi
 
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 if ! command -v cargo >/dev/null; then
-	[ -f "$HOME/.cargo/env" ] || curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
-	. "$HOME/.cargo/env"
+	echo "Rust isn't installed, and matrix-rust-sdk needs it: see https://rustup.rs, then run this again." >&2
+	exit 1
 fi
 
 mkdir -p "$WORK"

@@ -32,6 +32,8 @@ final class MatrixKitTests: XCTestCase {
 		XCTAssertEqual(read?.name, "notes.txt")
 		XCTAssertEqual(read?.url, "mxc://matrix.org/abc")
 		XCTAssertEqual(read?.size, 12)
+		XCTAssertEqual(file["msgtype"], "m.file")
+		XCTAssertEqual(MatrixMessage.file(name: "cat.png", url: "mxc://matrix.org/abc", size: 12, mimeType: "image/png")["msgtype"], "m.image")
 		XCTAssertNil(MatrixMessage.attachment(["msgtype": "m.text", "body": "hi", "url": "mxc://matrix.org/abc"]))
 		XCTAssertNil(MatrixMessage.attachment(["msgtype": "m.file", "body": "secret.txt", "file": ["url": "mxc://matrix.org/abc"]]))  // encrypted
 	}

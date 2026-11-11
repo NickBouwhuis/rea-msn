@@ -8,7 +8,7 @@ name: GTK smoke test
 on:
   workflow_dispatch:
   push:
-    branches: [gtk-smoke]
+    branches: [gtk-smoke, linux-matrix-sdk]
 
 permissions:
   contents: read
@@ -25,16 +25,32 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ pkg-config libcurl4-openssl-dev libxml2-dev \
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ cmake pkg-config libcurl4-openssl-dev libxml2-dev \
             libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev \
             xvfb openbox xdotool imagemagick dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi jq
+      # matrix-rust-sdk, as the Build workflow's Ubuntu 24.04 job builds and keeps it.
+      - uses: actions/cache/restore@v4
+        id: matrix-sdk
+        with:
+          path: Messenger/Vendor/MatrixSDK
+          key: matrix-sdk-ubuntu24.04-amd64-${{ hashFiles('linux/scripts/build-matrix-sdk.sh') }}
+      - name: Build matrix-rust-sdk
+        if: steps.matrix-sdk.outputs.cache-hit != 'true'
+        run: |
+          rustup update stable && rustup default stable
+          linux/scripts/build-matrix-sdk.sh
+      - uses: actions/cache/save@v4
+        if: steps.matrix-sdk.outputs.cache-hit != 'true'
+        with:
+          path: Messenger/Vendor/MatrixSDK
+          key: ${{ steps.matrix-sdk.outputs.cache-primary-key }}
       - uses: actions/cache/restore@v4
         id: cache
         with:
           path: |
             ~/.local/share/swiftly
             Messenger/.build
-          key: gtk-smoke-${{ env.SWIFT_VERSION }}-${{ hashFiles('Messenger/Package.swift', 'Messenger/Package.resolved') }}
+          key: gtk-smoke-sdk-${{ env.SWIFT_VERSION }}-${{ hashFiles('Messenger/Package.swift', 'Messenger/Package.resolved', 'linux/scripts/build-matrix-sdk.sh') }}
       - name: Install Swift ${{ env.SWIFT_VERSION }}
         run: |
           export SWIFTLY_HOME_DIR="$HOME/.local/share/swiftly" SWIFTLY_BIN_DIR="$HOME/.local/share/swiftly/bin"

@@ -310,7 +310,7 @@ wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre
 		<div class="list" role="list">
 			<div class="group">Works (13)</div>
 			<div class="buddy" role="listitem"><b>Sign in</b><span>with a password, or through your homeserver's own sign-in page in the browser</span></div>
-			<div class="buddy" role="listitem"><b>End-to-end encryption</b><span>your existing Element chats, and new chats start encrypted</span></div>
+			<div class="buddy" role="listitem"><b>End-to-end encryption</b><span>on macOS and Ubuntu: your existing Element chats, and new chats start encrypted</span></div>
 			<div class="buddy" role="listitem"><b>Verify this session</b><span>emoji with another session, or your recovery key</span></div>
 			<div class="buddy" role="listitem"><b>Contacts</b><span>your direct chats; adding someone invites them, and their invites show as "has added you"</span></div>
 			<div class="buddy" role="listitem"><b>Status and personal message</b><span>your Matrix presence and status message</span></div>
@@ -322,8 +322,7 @@ wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre
 			<div class="buddy" role="listitem"><b>Display pictures</b><span>your Matrix avatar and your contacts'</span></div>
 			<div class="buddy" role="listitem"><b>Block</b><span>Matrix's ignore list, shared with your other apps</span></div>
 			<div class="buddy" role="listitem"><b>Remember me</b><span>stays the same, verified session between launches</span></div>
-			<div class="group">Not yet (2)</div>
-			<div class="buddy off" role="listitem"><b>Encryption on Ubuntu</b><span>the Linux app speaks plain Matrix until matrix-rust-sdk is built for it</span></div>
+			<div class="group">Not yet (1)</div>
 			<div class="buddy off" role="listitem"><b>Voice and video</b></div>
 		</div>
 	</section>
@@ -353,6 +352,7 @@ wlm-messenger-matrix-import ~/Downloads/escargot-wlm-8.1.0178-en.msi</code></pre
 <pre><code>git clone https://github.com/NickBouwhuis/rea-msn.git
 cd rea-msn/Messenger
 swift run MatrixMessenger                  # macOS
+../linux/scripts/build-matrix-sdk.sh       # Linux, once: matrix-rust-sdk, for encryption (needs Rust)
 swift run MatrixMessengerGTK               # Linux
 docker compose -f ../devserver/matrix/docker-compose.yml up -d   # a local Synapse on :8008</code></pre>
 	</section>

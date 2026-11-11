@@ -35,6 +35,8 @@ esac
 STAGE="$(mktemp -d)"   # package root
 SHLIBS="$(mktemp -d)"  # scratch for dpkg-shlibdeps
 
+# Messenger for Matrix is packaged with end-to-end encryption: on matrix-rust-sdk.
+[ "${VARIANT:-escargot}" != matrix ] || "$HERE/build-matrix-sdk.sh"
 swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --product "$PRODUCT"
 BIN="$(swift build -c release --static-swift-stdlib --package-path "$PKG" --scratch-path "$SCRATCH" --show-bin-path)/$PRODUCT"
 install -D -m 755 "$BIN" "$STAGE/usr/bin/$NAME"

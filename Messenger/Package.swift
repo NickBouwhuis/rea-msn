@@ -9,7 +9,8 @@ import PackageDescription
 //   (end-to-end encryption, verification): a release of its Swift package on
 //   macOS, and on Linux a build of the same commit that
 //   linux/scripts/build-matrix-sdk.sh puts in Vendor/MatrixSDK. A Linux build
-//   without that folder is the plain client-server client, unencrypted.
+//   without that folder (or with MESSENGER_PLAIN_MATRIX set, for CI to keep
+//   building it) is the plain client-server client, unencrypted.
 var targets: [Target] = [
 	// zlib, for MSZIP-compressed wink cabinets (MSNKit/Util/Cabinet.swift).
 	.systemLibrary(name: "CZlib", providers: [.apt(["zlib1g-dev"])]),
@@ -30,7 +31,8 @@ targets += [
 	.target(name: "MSNKit", dependencies: ["CZlib", .product(name: "Crypto", package: "swift-crypto")]),
 ]
 let sdk = Context.packageDirectory + "/Vendor/MatrixSDK"
-if FileManager.default.fileExists(atPath: sdk + "/lib/libmatrix_sdk_ffi.a") {
+if ProcessInfo.processInfo.environment["MESSENGER_PLAIN_MATRIX"] == nil,
+   FileManager.default.fileExists(atPath: sdk + "/lib/libmatrix_sdk_ffi.a") {
 	targets += [
 		.systemLibrary(name: "MatrixSDKFFI", path: "Vendor/MatrixSDK/include"),
 		.target(name: "MatrixRustSDK", dependencies: ["MatrixSDKFFI"], path: "Vendor/MatrixSDK/swift",

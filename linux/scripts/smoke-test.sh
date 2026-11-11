@@ -49,6 +49,9 @@ api "$A" PUT "/user/$(enc @alice:localhost)/account_data/m.direct" \
 group=$(api "$B" POST /createRoom '{"preset":"private_chat","name":"Weekend plans","topic":"Where shall we go?","invite":["@alice:localhost","@carol:localhost"]}' | jq -r .room_id)
 api "$A" POST "/join/$(enc "$group")" '{}' >/dev/null
 api "$C" POST "/join/$(enc "$group")" '{}' >/dev/null
+# Said before she signs in: history, which the encrypting client shows greyed above the conversation.
+api "$B" PUT "/rooms/$(enc "$group")/send/m.room.message/smoke0" '{"msgtype":"m.text","body":"Shall we plan the weekend?"}' >/dev/null
+sleep 12  # history is what is older than her sign-in (less 10 s)
 api "$C" POST /createRoom '{"preset":"private_chat","name":"Book club","invite":["@alice:localhost"]}' >/dev/null
 api "$C" POST /createRoom '{"preset":"public_chat","name":"Open room","room_alias_name":"open-room"}' >/dev/null
 # Bob and Carol stay online, so that Invite lists them.
@@ -84,6 +87,16 @@ wait_for() {
 	done
 	echo "!! never showed: $*"
 	FAILED=1
+	return 1
+}
+# appears TEXT SECONDS [find options]: whether a widget with TEXT shows in time (not a failure if not).
+appears() {
+	local text=$1 seconds=$2
+	shift 2
+	for _ in $(seq 1 "$seconds"); do
+		at find "$text" "$@" >/dev/null 2>&1 && return 0
+		sleep 1
+	done
 	return 1
 }
 # click BUTTON TEXT [find options]: 1 left, 3 right.
@@ -132,8 +145,24 @@ place() {
 }
 MAIN="Windows Live Messenger"
 
-say "Signed in: the contact list, with the invitation to Book club on top"
+say "Signed in"
 wait_for "Group conversations"
+# With end-to-end encryption (matrix-rust-sdk), a new session asks to be verified.
+if appears "Verify this session" 30; then
+	shot 00-verify-this-session
+	press "Use recovery key" --exact
+	shot 00b-recovery-key
+	press "Back" --exact
+	press "Not now" --exact
+	sleep 1
+	press "Contacts menu" --exact
+	shot 00c-menu-offers-verification
+	press "Contacts menu" --exact
+else
+	echo "no verification prompt: the plain client"
+fi
+
+say "The contact list, with the invitation to Book club on top"
 wait_for "has invited you to the group conversation"
 shot 01-signed-in-invitation 2
 at dump >"$OUT/tree-01.txt"

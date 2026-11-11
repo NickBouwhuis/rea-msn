@@ -309,6 +309,11 @@ final class AppState {
 		w.post(.notice(text.replacingOccurrences(of: "%1", with: name(of: w.peer))))
 	}
 
+	/// The last messages from before this sign-in (Matrix keeps history; MSNP doesn't).
+	func history(with peer: String) async -> [IMHistoryMessage] {
+		await client?.recentMessages(with: peer, limit: 30) ?? []
+	}
+
 	func participants(with peer: String) -> [String] {
 		client?.participants(inConversationWith: peer) ?? [peer]
 	}
