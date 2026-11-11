@@ -1,0 +1,120 @@
+# Runs the GTK apps for real on Ubuntu, under a virtual display, clicked through
+# by linux/scripts/smoke-test.sh: Messenger for Matrix against the dev Synapse
+# (its group conversation features), then Windows Live Messenger against the
+# dev Escargot server. The screenshots it takes are the result: download the
+# "gtk-smoke" artifact and look at them. Run it by hand (Actions ▸ GTK smoke
+# test ▸ Run workflow, or `gh workflow run gtk-smoke.yml`).
+name: GTK smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SWIFT_VERSION: "6.4.1"
+
+jobs:
+  smoke:
+    name: Both GTK apps on Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          # The package servers fail now and then, or the runner's resolver
+          # can't find them: a few tries, from the second on with a public resolver.
+          for attempt in 1 2 3 4 5; do
+            [ "$attempt" = 1 ] || echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf >/dev/null
+            timeout 120 sudo apt-get update && \
+              sudo apt-get install -y --no-install-recommends libgtk-4-dev g++ cmake pkg-config libcurl4-openssl-dev libxml2-dev \
+                libsqlite3-dev libncurses-dev libedit-dev zlib1g-dev \
+                xvfb openbox xdotool imagemagick dbus-x11 at-spi2-core gir1.2-atspi-2.0 python3-gi jq && break
+            [ "$attempt" != 5 ] || exit 1
+            sleep 20
+          done
+      # matrix-rust-sdk, as the Build workflow's Ubuntu 24.04 job builds and keeps it.
+      - uses: actions/cache/restore@v4
+        id: matrix-sdk
+        with:
+          path: Messenger/Vendor/MatrixSDK
+          key: matrix-sdk-ubuntu24.04-amd64-${{ hashFiles('linux/scripts/build-matrix-sdk.sh') }}
+      - name: Build matrix-rust-sdk
+        if: steps.matrix-sdk.outputs.cache-hit != 'true'
+        run: |
+          rustup update stable && rustup default stable
+          linux/scripts/build-matrix-sdk.sh
+      - uses: actions/cache/save@v4
+        if: steps.matrix-sdk.outputs.cache-hit != 'true'
+        with:
+          path: Messenger/Vendor/MatrixSDK
+          key: ${{ steps.matrix-sdk.outputs.cache-primary-key }}
+      - uses: actions/cache/restore@v4
+        id: cache
+        with:
+          path: |
+            ~/.local/share/swiftly
+            Messenger/.build
+          key: gtk-smoke-sdk-${{ env.SWIFT_VERSION }}-${{ hashFiles('Messenger/Package.swift', 'Messenger/Package.resolved', 'linux/scripts/build-matrix-sdk.sh') }}
+      - name: Install Swift ${{ env.SWIFT_VERSION }}
+        run: |
+          export SWIFTLY_HOME_DIR="$HOME/.local/share/swiftly" SWIFTLY_BIN_DIR="$HOME/.local/share/swiftly/bin"
+          if [ ! -f "$SWIFTLY_HOME_DIR/env.sh" ]; then
+            curl -fsSL -O "https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz"
+            tar zxf "swiftly-$(uname -m).tar.gz"
+            ./swiftly init --quiet-shell-followup --assume-yes --skip-install
+          fi
+          . "$SWIFTLY_HOME_DIR/env.sh"
+          swiftly install --use --assume-yes --post-install-file "$RUNNER_TEMP/swift-deps.sh" "$SWIFT_VERSION"
+          if [ -s "$RUNNER_TEMP/swift-deps.sh" ]; then sudo bash "$RUNNER_TEMP/swift-deps.sh"; fi
+          swift --version
+      - name: Build
+        working-directory: Messenger
+        run: |
+          . "$HOME/.local/share/swiftly/env.sh"
+          swift build --product MatrixMessengerGTK
+          swift build --product MessengerGTK
+          swift build --product msnctl
+      - uses: actions/cache/save@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.local/share/swiftly
+            Messenger/.build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Start Synapse
+        run: |
+          docker compose -f devserver/matrix/docker-compose.yml up -d
+          # The accounts are registered once it answers; carol is the last.
+          for i in $(seq 1 90); do
+            curl -fsS -X POST -d '{"type":"m.login.password","identifier":{"type":"m.id.user","user":"carol"},"password":"123456"}' \
+              http://127.0.0.1:8008/_matrix/client/v3/login >/dev/null 2>&1 && exit 0
+            sleep 2
+          done
+          docker compose -f devserver/matrix/docker-compose.yml logs | tail -50
+          exit 1
+      - name: Click through Messenger for Matrix
+        run: |
+          APP="$PWD/Messenger/.build/debug/MatrixMessengerGTK" MSNCTL="$PWD/Messenger/.build/debug/msnctl" OUT="$PWD/smoke" \
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
+      - name: Start the Escargot dev server
+        if: always()
+        run: |
+          docker compose -f devserver/docker-compose.yml up -d --build
+          for i in $(seq 1 60); do
+            (exec 3<>/dev/tcp/127.0.0.1/1863) 2>/dev/null && exit 0
+            sleep 2
+          done
+          docker compose -f devserver/docker-compose.yml logs | tail -50
+          exit 1
+      - name: Click through Windows Live Messenger
+        if: always()
+        run: |
+          SCENARIO=escargot APP="$PWD/Messenger/.build/debug/MessengerGTK" MSNCTL="$PWD/Messenger/.build/debug/msnctl" OUT="$PWD/smoke" \
+            dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gtk-smoke
+          path: smoke
