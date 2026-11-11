@@ -4,7 +4,9 @@
 #
 # SCENARIO=matrix (the default): Messenger for Matrix against devserver/matrix's
 # Synapse, fresh (alice, bob and carol, password 123456), through its group
-# conversation features; the other people are played over the Matrix API.
+# conversation features; the other people are played over the Matrix API. With
+# MSNCTL (the msnctl binary, built on matrix-rust-sdk), it is also verified
+# by emoji against another session of the account.
 # SCENARIO=escargot: Windows Live Messenger against devserver's Escargot
 # server: signs in, has no Matrix items in its menu, and gets a message that
 # MSNCTL (the msnctl binary) sends as Bob.
@@ -39,6 +41,15 @@ api() {
 # --- Matrix: the accounts' side of things, before the app starts --------------
 
 matrix_setup() {
+# Another session of Alice's, there first: it sets up cross-signing, so the
+# app's session starts unverified, and it accepts a verification and confirms
+# the emoji. (msnctl has "verify-wait" only when built on matrix-rust-sdk.)
+if [ -n "${MSNCTL:-}" ]; then
+	stdbuf -oL "$MSNCTL" --matrix "$HS" verify-wait @alice:localhost 123456 900 >"$OUT/verify-responder.log" 2>&1 &
+	RESPONDER=$!
+	for _ in $(seq 1 60); do grep -q "Signed in as" "$OUT/verify-responder.log" && break; sleep 1; done
+	sleep 5
+fi
 A=$(login alice) B=$(login bob) C=$(login carol)
 for who in "$A Alice @alice:localhost" "$B Bob @bob:localhost" "$C Carol @carol:localhost"; do
 	set -- $who
@@ -72,8 +83,9 @@ KEEPER=$!
 # --- The app -----------------------------------------------------------------
 
 KEEPER=
+RESPONDER=
 APP_PID=
-trap 'kill $APP_PID $KEEPER 2>/dev/null' EXIT
+trap 'kill $APP_PID $KEEPER $RESPONDER 2>/dev/null' EXIT
 # launch NAME=VALUE...: the app, signed in through its development hooks.
 launch() {
 	openbox >/dev/null 2>&1 &
@@ -181,8 +193,8 @@ press "Contacts menu" --exact
 
 say "A message from Bob opens a conversation"
 "${MSNCTL:?path to the msnctl binary}" --local say bob@example.com 123456 alice@example.com "Hello from Bob" 8 >"$OUT/msnctl-escargot.log" 2>&1 &
-wait_for "bob@example.com" --in "bob@example.com"
-place "bob@example.com" 420 20
+wait_for "Bob" --in "Bob"
+place "Bob" 420 20
 shot e03-conversation 4
 at dump >"$OUT/tree-escargot.txt"
 }
@@ -193,24 +205,8 @@ matrix_scenario() {
 matrix_setup
 launch MESSENGER_MATRIX_HOMESERVER="$HS" MESSENGER_AUTOLOGIN=@alice:localhost:123456
 
-say "Signed in"
+say "Signed in: the contact list, with the invitation to Book club on top"
 wait_for "Group conversations"
-# With end-to-end encryption (matrix-rust-sdk), a new session asks to be verified.
-if appears "Verify this session" 30; then
-	shot 00-verify-this-session
-	press "Use recovery key" --exact
-	shot 00b-recovery-key
-	press "Back" --exact
-	press "Not now" --exact
-	sleep 1
-	press "Contacts menu" --exact
-	shot 00c-menu-offers-verification
-	press "Contacts menu" --exact
-else
-	echo "no verification prompt: the plain client"
-fi
-
-say "The contact list, with the invitation to Book club on top"
 wait_for "has invited you to the group conversation"
 shot 01-signed-in-invitation 2
 at dump >"$OUT/tree-01.txt"
@@ -221,6 +217,39 @@ sleep 2
 wait_for "Book club" --in "$MAIN"
 place "$MAIN" 20 20
 shot 02-contact-list
+
+# With end-to-end encryption, a session that isn't the account's first asks to
+# be verified. (Not the plain client, nor an account's first session, which
+# sets up cross-signing itself.)
+if appears "Verify this session" 40 --exact; then
+	say "Verifying this session: the recovery key's page, then emoji with the other session"
+	shot 02a-verify-this-session
+	press "Use recovery key" --exact
+	shot 02b-recovery-key
+	press "Back" --exact
+	press "Use another session" --exact
+	if appears "Do these appear on your other session, in the same order?" 60; then
+		shot 02c-emoji
+		press "They match" --exact
+		if appears "This session is verified" 60; then shot 02d-verified; else echo "!! the session wasn't verified"; FAILED=1; fi
+		press "OK" --exact
+	else
+		echo "!! no emoji to compare"
+		FAILED=1
+		shot 02c-no-emoji
+		press "Cancel" --exact || press "Close" --exact
+	fi
+	sleep 2
+	press "Contacts menu" --exact
+	shot 02e-contacts-menu-after
+	if at find "Verify this session..." --exact >/dev/null 2>&1; then
+		echo "!! the menu still offers to verify"
+		FAILED=1
+	fi
+	press "Contacts menu" --exact
+else
+	echo "no verification prompt (the plain client, or the account's first session)"
+fi
 
 say "A message in a group opens its window"
 api "$B" PUT "/rooms/$(enc "$group")/send/m.room.message/smoke1" '{"msgtype":"m.text","body":"Who is in for Saturday?"}' >/dev/null

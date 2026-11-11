@@ -194,7 +194,11 @@ jobs:
       - name: Install check
         run: |
           SUDO=""; [ "$(id -u)" = 0 ] || SUDO=sudo
-          $SUDO apt-get install -y ./build/*.deb
+          # As above: with a public resolver if the runner's can't find the package servers.
+          timeout 300 $SUDO apt-get install -y ./build/*.deb || {
+            echo "nameserver 8.8.8.8" | $SUDO tee /etc/resolv.conf >/dev/null
+            $SUDO apt-get install -y ./build/*.deb
+          }
           for app in wlm-messenger wlm-messenger-matrix; do
             ! ldd "/usr/bin/$app" | grep "not found"
             dpkg -L "$app"

@@ -98,7 +98,7 @@ jobs:
           exit 1
       - name: Click through Messenger for Matrix
         run: |
-          APP="$PWD/Messenger/.build/debug/MatrixMessengerGTK" OUT="$PWD/smoke" \
+          APP="$PWD/Messenger/.build/debug/MatrixMessengerGTK" MSNCTL="$PWD/Messenger/.build/debug/msnctl" OUT="$PWD/smoke" \
             dbus-run-session -- xvfb-run -a -s "-screen 0 1400x900x24" linux/scripts/smoke-test.sh
       - name: Start the Escargot dev server
         if: always()
